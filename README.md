@@ -14,3 +14,7 @@ Dev infrastructure for DCRE Collections 3.0. Two paths, same images (dev/prod pa
 See `.env.example`. Clean-clone rule: everything runs with NO `.env`; the file is the override point. 12FactorApp Alignment - https://12factor.net/.
 
 Databases `dcre_collections` and `agt_ops` are created by `scripts/crdb-init.sql` (guarded, never DROP).
+
+## Dashboards
+
+Grafana (LGTM, http://localhost:3000): `dcre-pipeline` (RED baseline: stage runs/failures/p95/records by service) and `dcre-agt` (arrivals, intents, outcomes, lease, reconciler orphans). Managed via API/MCP, never hand-edited JSON; series bind in M1/M2 when services emit `dcre_*` / `agt_*` metrics.
