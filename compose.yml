@@ -1,0 +1,26 @@
+name: dcre
+services:
+  crdb:
+    image: cockroachdb/cockroach:v26.2.3   # verified latest stable 2026-07-12; no Alpine variant exists for CockroachDB
+    command: start-single-node --insecure
+    ports:
+      - "26257:26257"
+      - "8081:8080"
+    volumes:
+      - crdb-data:/cockroach/cockroach-data
+      - ./scripts/crdb-init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "cockroach", "sql", "--insecure", "-e", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  lgtm:
+    image: grafana/otel-lgtm:0.28.0        # verified latest stable 2026-07-12
+    ports:
+      - "3000:3000"
+      - "4317:4317"
+      - "4318:4318"
+
+volumes:
+  crdb-data:
