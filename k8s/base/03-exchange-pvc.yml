@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: dcre-exchange-pv
+  labels:
+    app.kubernetes.io/part-of: dcre
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: ["ReadWriteMany"]
+  storageClassName: dcre-exchange
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /dcre-exchange
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dcre-exchange
+  namespace: dcre
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: dcre-exchange
+  resources:
+    requests:
+      storage: 1Gi
