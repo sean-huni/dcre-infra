@@ -4,11 +4,12 @@
 # Fleet-wide only: never mix across the 2.0 boundary (2.0 AGT speaks
 # BUSINESS_FILE_REJECTED; 1.x AGT does not). Stage images must be kind-loaded first.
 #
-# DOWNGRADE WARNING (2.0 -> 1.x): drain first. A 1.x AGT reading a 2.0 CTV seam
-# file records TECH_FAILED durably (stage_outcome is insert-once), permanently
-# masking the real verdict; the arrival strands DAG_RUNNING and needs manual
-# repair (delete the poisoned stage_outcome row). Before downgrading, stop file
-# drops and wait until agt_ops has no launch_intent without a stage_outcome.
+# DOWNGRADE FORBIDDEN (Sean-ruled 2026-07-13): once the fleet is on 2.0, never
+# switch AGT back to 1.x. A 1.x AGT reading a 2.0 CTV seam file records
+# TECH_FAILED durably (stage_outcome is insert-once), permanently masking the
+# real verdict; the arrival strands DAG_RUNNING and needs manual repair.
+# The guard below enforces this; in-flight background work must be waited out,
+# never terminated.
 set -euo pipefail
 
 VERSION=${1:-}
@@ -18,6 +19,13 @@ case "$VERSION" in
 esac
 
 NS=dcre
+
+CURRENT=$(kubectl get deploy dcre-agt -n $NS -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d: -f2)
+if [[ "$CURRENT" == "2.0" && "$VERSION" != "2.0" ]]; then
+  echo "REFUSED: fleet is on 2.0; downgrading AGT to $VERSION is forbidden (Sean-ruled 2026-07-13)." >&2
+  echo "1.x AGT would durably poison stage_outcome rows for in-flight 2.0 arrivals." >&2
+  exit 65
+fi
 STAGES=(CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS)
 
 kubectl set image -n $NS deploy/dcre-agt agt=dcre-agt:$VERSION
