@@ -5,9 +5,19 @@ Dev infrastructure for DCRE Collections 3.0. Two paths, same images (dev/prod pa
 - **Compose (inner loop):** `docker compose up -d` gives CockroachDB (26257, UI 8081), grafana/otel-lgtm (Grafana 3000, OTLP 4317/4318) and the MFT-sim `exchange/` directories.
 - **kind (pipeline DevTesting):** `./scripts/kind-up.sh` creates cluster `dcre-dev` with namespace `dcre`, AGT RBAC, in-cluster CockroachDB and the `dcre-exchange` PVC backed by this repo's `exchange/` dir (drop a file locally, pods see it).
 
-## Exchange directory contract (R-30/R-31)
+## Exchange directory contract (R-30/R-31, per-client SCRUM-42)
 
-`onhost-req` (inbound copybooks; filenames carry client + MsgId) · `onhost-resp` (CIR/PRG output) · `fint-req` (CRW pain.008) · `fint-resp` (pain.002-family) · `archive` / `error` (file lifecycle) · `outcomes` (M1/M2 synthetic AGT-service outcome seam, SYNTHETIC-CONTRACT) · `chaos` (test fault injection).
+Client-first layout under the single exchange root: `exchange/<clientbase>/<channel>/<sub>`, with `clientbase` lowercase for each client in scope (`fnbcc01`, `fnbcc02`, `fnbrf01`). Each channel has its `in`/`out`/`error`/`archive` lifecycle subdirs:
+
+- `onhost-req` (in/error/archive): inbound copybooks; filenames carry client + MsgId; AGT watches `in`.
+- `onhost-req-endo` (in/error/archive): inbound ENDO/AIS DAG.
+- `onhost-resp` (out/error/archive): CIR/PRG output.
+- `fint-req` (out/error/archive): CRW pain.008; fint-sim consumes `out`.
+- `fint-resp` (in/error/archive): pain.002-family; fint-sim drops `in`; AGT watches.
+
+Under the inbound channels (`onhost-req`, `onhost-req-endo`, `fint-resp`), `archive` also hosts AGT's nested `inflight/` and `duplicates/` sinks.
+
+Two seams stay **global** (outside the per-client tree, directly under the exchange root): `outcomes` (M1/M2 synthetic AGT-service outcome seam, SYNTHETIC-CONTRACT) and `chaos` (test fault injection).
 
 ## Env contract
 
