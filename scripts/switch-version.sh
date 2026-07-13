@@ -14,16 +14,20 @@ set -euo pipefail
 
 VERSION=${1:-}
 case "$VERSION" in
-  1.0|1.1|2.0) ;;
-  *) echo "usage: $0 <1.0|1.1|2.0>" >&2; exit 64 ;;
+  1.0|1.1|2.0|2.0.1) ;;
+  *) echo "usage: $0 <1.0|1.1|2.0|2.0.1>" >&2; exit 64 ;;
 esac
 
 NS=dcre
 
 CURRENT=$(kubectl get deploy dcre-agt -n $NS -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d: -f2)
-if [[ "$CURRENT" == "2.0" && "$VERSION" != "2.0" ]]; then
-  echo "REFUSED: fleet is on 2.0; downgrading AGT to $VERSION is forbidden (Sean-ruled 2026-07-13)." >&2
+if [[ "$CURRENT" == 2.0* && "$VERSION" != 2.0* ]]; then
+  echo "REFUSED: fleet is on $CURRENT; downgrading AGT to $VERSION is forbidden (Sean-ruled 2026-07-13)." >&2
   echo "1.x AGT would durably poison stage_outcome rows for in-flight 2.0 arrivals." >&2
+  exit 65
+fi
+if [[ "$CURRENT" == "2.0.1" && "$VERSION" == "2.0" ]]; then
+  echo "REFUSED: 2.0 re-opens the A-45 response-file collision fixed in 2.0.1." >&2
   exit 65
 fi
 STAGES=(CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS)
