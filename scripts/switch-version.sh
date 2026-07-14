@@ -21,7 +21,7 @@ esac
 NS=dcre
 
 CURRENT=$(kubectl get deploy dcre-agt -n $NS -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d: -f2)
-if [[ "$CURRENT" == 2.0* && "$VERSION" != 2.0* ]]; then
+if [[ "$CURRENT" == 2.0* && "$VERSION" == 1.* ]]; then
   echo "REFUSED: fleet is on $CURRENT; downgrading AGT to $VERSION is forbidden (Sean-ruled 2026-07-13)." >&2
   echo "1.x AGT would durably poison stage_outcome rows for in-flight 2.0 arrivals." >&2
   exit 65
