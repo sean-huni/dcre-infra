@@ -14,8 +14,8 @@ set -euo pipefail
 
 VERSION=${1:-}
 case "$VERSION" in
-  1.0|1.1|2.0|2.0.1) ;;
-  *) echo "usage: $0 <1.0|1.1|2.0|2.0.1>" >&2; exit 64 ;;
+  1.0|1.1|2.0|2.0.1|2.1.0) ;;
+  *) echo "usage: $0 <1.0|1.1|2.0|2.0.1|2.1.0>" >&2; exit 64 ;;
 esac
 
 NS=dcre
@@ -31,6 +31,15 @@ if [[ "$CURRENT" == "2.0.1" && "$VERSION" == "2.0" ]]; then
   exit 65
 fi
 STAGES=(CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS)
+
+
+# 2.1.0 guard: per-client exchange tree + per-attempt outcome schema (005) make any
+# downgrade from 2.1.0 unsafe (older stages read the flat tree; older AGT cannot
+# read per-attempt outcomes).
+if [[ "$CURRENT" == 2.1* && "$VERSION" != 2.1* ]]; then
+  echo "REFUSED: downgrade from $CURRENT to $VERSION (per-client tree + attempt schema)" >&2
+  exit 65
+fi
 
 kubectl set image -n $NS deploy/dcre-agt agt=dcre-agt:$VERSION
 for s in $STAGES; do

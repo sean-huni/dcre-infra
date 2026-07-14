@@ -42,9 +42,31 @@ spec:
       containers:
         - name: crdb
           image: cockroachdb/cockroach:v26.2.3
-          args: ["start-single-node", "--insecure"]
+          # Cap cache + SQL memory to absolute values. Without these, CRDB sizes
+          # them off perceived node RAM (no cgroup awareness with an unbounded
+          # pod) and over-allocates. Sizing proven live under the 100x50k chaos
+          # cycle (A-51, 2026-07-13): total RSS runs ~2x the managed budgets under
+          # write load (2Gi limit was cgroup-OOM-killed repeatedly), and the R-41
+          # content-dedup scan grows with retained tx_entry volume, so SQL memory
+          # dominates cache for this workload.
+          args:
+            - "start-single-node"
+            - "--insecure"
+            - "--cache=256MiB"
+            - "--max-sql-memory=1024MiB"
           ports:
             - containerPort: 26257
+          # Reserve memory so the scheduler stops overcommitting the node against
+          # the DB. Request stays 2Gi (a 4Gi request would starve stage pods on an
+          # 8Gi node); the 4Gi limit gives the ~2x-budget RSS headroom A-51 measured.
+          # No CPU limit so the readiness probe is never CPU-throttled during
+          # batch waves.
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              memory: 4Gi
           volumeMounts:
             - name: data
               mountPath: /cockroach/cockroach-data
@@ -55,6 +77,8 @@ spec:
               command: ["cockroach", "sql", "--insecure", "-e", "SELECT 1"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
       volumes:
         - name: init
           configMap:
