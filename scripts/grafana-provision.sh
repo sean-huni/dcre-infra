@@ -59,10 +59,17 @@ ensure_ds() {  # org_id, ds_name, db, db_user
   # Update by UID: Grafana 13 removed the numeric-id datasource write endpoint
   # (PUT /api/datasources/:id -> 404); the supported path is /api/datasources/uid/:uid.
   local existing=$(curl -s -u "$AUTH" -H "X-Grafana-Org-Id: $oid" "$G/api/datasources/name/$name" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("uid",""))' 2>/dev/null || true)
+  # Grafana 11+ Postgres frontend reads the database from jsonData.database, NOT the
+  # legacy top-level "database" field. With only the top-level set, the BACKEND query
+  # path (/api/ds/query) still connects (it honours the legacy field), but the browser
+  # panel frontend short-circuits every query with "You do not currently have a default
+  # database configured for this data source" and shows an error triangle on all panels.
+  # Set database in BOTH places so panels actually render (kept legacy field for the
+  # backend/older path; jsonData.database is the field the current UI requires).
   local payload=$(cat <<EOF
 {"name":"$name","type":"postgres","access":"proxy","url":"crdb:26257","user":"$dbuser",
  "database":"$db","isDefault":$( [[ "$name" == "dcre-rpt" ]] && echo true || echo false ),
- "jsonData":{"sslmode":"disable","postgresVersion":1000,"timescaledb":false,"timeInterval":"30s","maxOpenConns":10},
+ "jsonData":{"database":"$db","sslmode":"disable","postgresVersion":1000,"timescaledb":false,"timeInterval":"30s","maxOpenConns":10},
  "secureJsonData":{"password":""}}
 EOF
 )

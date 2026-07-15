@@ -3,3 +3,6 @@
 exchange/**
 !exchange/**/
 !exchange/**/.gitkeep
+# grafana-screenshots.mjs local run artifacts (playwright module + PNG output)
+node_modules/
+build/
