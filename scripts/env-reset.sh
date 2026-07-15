@@ -95,7 +95,22 @@ echo "[9/13] restart AGT (applies its Liquibase, watcher+clocks resume)"
 kubectl scale deploy dcre-agt -n $NS --replicas=1
 kubectl rollout status deploy/dcre-agt -n $NS --timeout=120s
 
-echo "[10/13] warm-up drops: one tiny file per route so every service's Liquibase"
+echo "[10/13] reference seed BEFORE warm-up (seed DDL creates account/mandate;\n        AIS 000-bootstrap only guards ordering and runs far too late for warm-up)"
+if [[ -n "$SEED_ACCOUNTS" ]]; then
+  for f in $SEED_ACCOUNTS $SEED_MANDATES; do
+    [[ -f $f ]] || { echo "ERROR: seed file not found: $f" >&2; exit 1; }
+  done
+  echo "        seeding accounts from $SEED_ACCOUNTS ($(wc -l < $SEED_ACCOUNTS | tr -d ' ') lines; large seeds take minutes)..."
+  kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections < $SEED_ACCOUNTS > /dev/null
+  echo "        accounts file done: $(sqlval 'SELECT count(*) FROM account;' dcre_collections) rows in account"
+  echo "        seeding mandates from $SEED_MANDATES ($(wc -l < $SEED_MANDATES | tr -d ' ') lines)..."
+  kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections < $SEED_MANDATES > /dev/null
+  echo "        mandates file done: $(sqlval 'SELECT count(*) FROM mandate;' dcre_collections) rows in mandate"
+else
+  echo "        skipped (no --seed): load accounts/mandates SQL before real fixtures"
+fi
+
+echo "[11/13] warm-up drops: one tiny file per route so every service's Liquibase"
 echo "        recreates its tables (files NACK against a fresh seed: expected, harmless)"
 WARM_REQ_IN=$EX/fnbrf01/onhost-req/in
 WARM_ENDO_IN=$EX/fnbrf01/onhost-req-endo/in
@@ -109,27 +124,17 @@ for d in $WARM_REQ_IN $WARM_ENDO_IN; do
 done
 cp $INFRA/fixtures/warmup/FNBRF01_DCRERF2026071120010002.txt $WARM_REQ_IN/
 cp $INFRA/fixtures/warmup/FNBRF01_DCRERF2026071120020002.txt $WARM_ENDO_IN/
-echo "        waiting for CTV's first run to create account/mandate tables..."
-typeset -i guard=0
-until kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections \
-      -e "SELECT 1 FROM account LIMIT 1; SELECT 1 FROM mandate LIMIT 1;" >/dev/null 2>&1; do
-  sleep 10; guard+=1
-  (( guard > 60 )) && { echo "ERROR: reference tables not created after 10min" >&2; exit 1; }
-done
-
-echo "[11/13] reference seed"
 if [[ -n "$SEED_ACCOUNTS" ]]; then
-  for f in $SEED_ACCOUNTS $SEED_MANDATES; do
-    [[ -f $f ]] || { echo "ERROR: seed file not found: $f" >&2; exit 1; }
+  echo "        verifying account/mandate exist (created by the seed DDL in step 10)..."
+  typeset -i guard=0
+  until kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections \
+        -e "SELECT 1 FROM account LIMIT 1; SELECT 1 FROM mandate LIMIT 1;" >/dev/null 2>&1; do
+    sleep 10; guard+=1
+    (( guard > 60 )) && { echo "ERROR: reference tables missing after 10min despite seed" >&2; exit 1; }
   done
-  echo "        seeding accounts from $SEED_ACCOUNTS ($(wc -l < $SEED_ACCOUNTS | tr -d ' ') lines; large seeds take minutes)..."
-  kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections < $SEED_ACCOUNTS > /dev/null
-  echo "        accounts file done: $(sqlval 'SELECT count(*) FROM account;' dcre_collections) rows in account"
-  echo "        seeding mandates from $SEED_MANDATES ($(wc -l < $SEED_MANDATES | tr -d ' ') lines)..."
-  kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections < $SEED_MANDATES > /dev/null
-  echo "        mandates file done: $(sqlval 'SELECT count(*) FROM mandate;' dcre_collections) rows in mandate"
 else
-  echo "        skipped (no --seed): load accounts/mandates SQL before real fixtures"
+  echo "WARN: no --seed given; account/mandate do not exist until a seed or AIS runs." >&2
+  echo "      CTV warm-up will TECH-fail (relation account does not exist) until then." >&2
 fi
 
 echo "[12/13] post-checks + reset stamp"
