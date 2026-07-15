@@ -66,7 +66,7 @@ done
 
 echo "[6/13] pre-seed Liquibase history+lock tables, ONLY after the drain"
 echo "       (first-run bootstrap-race guard; idempotent IF NOT EXISTS)"
-kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure \
+kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_collections \
   < $INFRA/scripts/seed-liquibase-history.sql > /dev/null
 
 echo "[7/13] verify all 22 history+lock tables exist BEFORE any service comes back"
