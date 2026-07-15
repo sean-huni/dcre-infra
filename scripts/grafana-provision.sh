@@ -42,6 +42,16 @@ ensure_user() {  # login, org_id
   # Add to the org as Editor (tolerate "already member" on re-run).
   curl -s -u "$AUTH" -H 'Content-Type: application/json' -X POST "$G/api/orgs/$oid/users" \
     -d "{\"loginOrEmail\":\"$login\",\"role\":\"Editor\"}" > /dev/null || true
+  # Grafana auto-adds every admin-created user to Main Org (id 1) as Viewer, which would
+  # land a client user in Main Org on login (breaking per-client isolation) and expose
+  # Main Org's LGTM observability datasources. Remove the provisioned user from Main Org so
+  # its sole membership is its client org. Idempotent: on re-run the user is already gone,
+  # so DELETE returns non-2xx (404 / "user not found in org") and we tolerate it. Never the
+  # admin user (id 1) - ensure_user is only ever called for client logins, and we guard on it.
+  local uid=$(curl -sf -u "$AUTH" "$G/api/users/lookup?loginOrEmail=$login" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' 2>/dev/null || true)
+  if [[ -n "$uid" && "$uid" != "1" ]]; then
+    curl -s -u "$AUTH" -X DELETE "$G/api/orgs/1/users/$uid" > /dev/null || true
+  fi
 }
 
 ensure_ds() {  # org_id, ds_name, db, db_user
