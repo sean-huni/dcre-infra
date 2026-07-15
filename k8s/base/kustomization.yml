@@ -15,3 +15,4 @@ resources:
   - 01-rbac.yml
   - 02-crdb.yml
   - 03-exchange-pvc.yml
+  - 04-lgtm.yml

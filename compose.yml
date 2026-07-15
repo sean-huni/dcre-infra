@@ -16,7 +16,7 @@ services:
       retries: 20
 
   lgtm:
-    image: grafana/otel-lgtm:0.28.0        # verified latest stable 2026-07-12
+    image: grafana/otel-lgtm:0.29.0        # verified latest stable 2026-07-15
     ports:
       - "3000:3000"
       - "4317:4317"

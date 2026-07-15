@@ -69,14 +69,14 @@ echo "       (first-run bootstrap-race guard; idempotent IF NOT EXISTS)"
 kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_collections \
   < $INFRA/scripts/seed-liquibase-history.sql > /dev/null
 
-echo "[7/13] verify all 22 history+lock tables exist BEFORE any service comes back"
+echo "[7/13] verify all 24 history+lock tables exist BEFORE any service comes back"
 typeset -i vguard=0
 while :; do
   lbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_collections] WHERE table_name LIKE '%databasechangelog%';") || lbt=""
-  [[ "$lbt" == "22" ]] && break
+  [[ "$lbt" == "24" ]] && break
   vguard+=1
   if (( vguard > 6 )); then
-    echo "ERROR: expected 22 Liquibase history+lock tables in dcre_collections, found ${lbt:-0}." >&2
+    echo "ERROR: expected 24 Liquibase history+lock tables in dcre_collections, found ${lbt:-0}." >&2
     echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
     exit 1
   fi
