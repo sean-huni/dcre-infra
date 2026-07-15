@@ -85,6 +85,11 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `crdb-forward.sh` | Idempotent CRDB port-forward: SQL 26258, DB Console 8081 (matches the compose mapping) |
 | `lgtm-forward.sh` | Idempotent Grafana forward: host 3001 (3000 stays reserved for compose LGTM) |
 | `lgtm-up.sh` | Revive the compose LGTM container with a Grafana health wait (OTLP exporters fail open, so a dead collector drops telemetry silently) |
+| `grafana-provision.sh` | Idempotent client-stats provisioning against the in-cluster Grafana (:3001): 4 orgs (FNBCC01, FNBCC02, FNBRF01, FNB Internal), one Editor login per org (dev password `devdev`), and per-org CockroachDB datasources scoped to that client's DB role (`dcre-rpt`; FNB Internal also gets `dcre-ops` on `agt_ops`). Basic-auth admin API; removes each client from Main Org so its sole membership is its own org |
+| `grafana-dashboards.sh` | Posts two dashboard packs (fixed UIDs, `overwrite:true`, idempotent): `dcre-client-stats` to every org (session-identity portability: one JSON renders per-client via each org's scoped datasource) and `dcre-internal-stats` to FNB Internal only |
+| `rpt-accuracy-check.sh` | 54-check accuracy matrix: independent raw-SQL derivation from base tables (as `root`) vs the rpt views the dashboards display (as each client / `rpt_internal`); fail-closed (empty/non-numeric FAILS), exits non-zero on any mismatch (spec gate) |
+| `rpt-security-probes.sh` | Negative security probes: grants wall (client role denied on `public.*` and ops views, asserting SQLSTATE 42501) plus per-view cross-client scoping and a non-emptiness canary; exits non-zero on any unexpected access |
+| `grafana-screenshots.mjs` | Playwright (headless chromium) evidence capture: logs in as each org user and screenshots every dashboard, proving per-client isolation and full panel rendering (tall viewport so lazy panels paint). Manifest: `scripts/package.json` |
 | `env-reset.sh [--seed accounts.sql mandates.sql]` | 13-step clean slate: stop AGT, delete Jobs/pods, stop fint-sim, drop+recreate both DBs, drain CRDB schema-change jobs, pre-seed and verify all 26 Liquibase history+lock tables (24 in `dcre_collections`, 2 `rpt_*` in `agt_ops`), clean the exchange, restart AGT, optional reference reseed, warm-up drops per route, post-checks, restart fint-sim |
 | `switch-version.sh <1.0\|1.1\|2.0\|2.0.1\|2.1.0>` | Fleet-wide release switch: sets the AGT image and every `AGT_<STAGE>_IMAGE` env (CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS); refuses 2.x to 1.x, 2.0.1 to 2.0, and any downgrade off 2.1.x |
 | `fint-sim.sh` + `fint_sim_reply.py` | Fintegrate simulator: per client, polls `fint-req/out` for `*_PAIN008.xml`, replies with `{client}_{msgId}_ISR/SBSR/PBSR.xml` into `fint-resp/in` (atomic tmp+rename; every 4th tx RJCT with Rsn AC04), archives the request |
@@ -111,7 +116,33 @@ Stage images are built in each service repo, then loaded into the cluster; AGT (
 cp FNBRF01_*.txt exchange/fnbrf01/onhost-req/in/
 ```
 
-Grafana dashboards (`dcre-pipeline` RED baseline, `dcre-agt` arrivals/intents/outcomes) are managed via the Grafana API/MCP, never hand-edited JSON; the in-cluster Grafana is PVC-backed so they survive pod restarts.
+## Observability and client stats (M8)
+
+Two Grafana instances run, deliberately kept separate:
+
+- **In-cluster LGTM** (`grafana/otel-lgtm:0.29.0`, deployed by `k8s/base/04-lgtm.yml`, PVC-backed) is the pipeline-DevTesting target. AGT and the stage services export OTLP to the in-cluster collector at `lgtm:4317` (svc `lgtm`, SCRUM-52); Grafana is reached on the host at http://localhost:3001 via `scripts/lgtm-forward.sh` (host 3000 stays reserved for the compose LGTM).
+- **Compose LGTM** (Grafana 3000, OTLP 4317/4318) stays for the inner loop: a separate, also-healthy Grafana. Do not cross the wires.
+
+The ambient `GRAFANA_URL` (used by the Grafana MCP) points at the *compose* LGTM on :3000, so the client-stats scripts deliberately target :3001 explicitly (override with `DCRE_GRAFANA_URL`) rather than inherit it.
+
+**Operational dashboards** (`dcre-pipeline` RED baseline, `dcre-agt` arrivals/intents/outcomes) are managed via the Grafana API/MCP, never hand-edited JSON; the in-cluster Grafana is PVC-backed so they survive pod restarts.
+
+**Client self-service stats** (M8, SCRUM-50) are provisioned and verified deterministically by the scripts above, in order:
+
+```bash
+./scripts/lgtm-forward.sh          # Grafana on :3001
+./scripts/crdb-forward.sh          # CRDB SQL on :26258 (probes/accuracy need it)
+./scripts/grafana-provision.sh     # 4 orgs + per-role scoped datasources (login devdev)
+./scripts/grafana-dashboards.sh    # client + internal dashboard packs
+./scripts/rpt-security-probes.sh   # grants wall + cross-client scoping (exit 0 = pass)
+./scripts/rpt-accuracy-check.sh    # 54-check accuracy matrix (exit 0 = pass)
+
+# Screenshot evidence (Playwright; first run installs deps + the browser):
+cd scripts && npm install && npx playwright install chromium
+node grafana-screenshots.mjs
+```
+
+The captured M8 evidence (accuracy matrix, security probes, per-client screenshots, chaos + review notes) lives in the design-register repo under `docs/evidence/2026-07-15-client-stats/`.
 
 ## Related repositories
 
