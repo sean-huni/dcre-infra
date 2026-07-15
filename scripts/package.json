@@ -1,0 +1,13 @@
+{
+  "name": "dcre-infra-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node tooling for DCRE infra runbooks (Grafana client-stats screenshot evidence capture).",
+  "type": "module",
+  "scripts": {
+    "screenshots": "node grafana-screenshots.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}
