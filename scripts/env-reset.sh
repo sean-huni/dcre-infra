@@ -82,6 +82,18 @@ while :; do
   fi
   sleep 5
 done
+typeset -i rguard=0
+while :; do
+  rbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM agt_ops] WHERE table_name LIKE 'rpt_databasechangelog%';") || rbt=""
+  [[ "$rbt" == "2" ]] && break
+  rguard+=1
+  if (( rguard > 6 )); then
+    echo "ERROR: expected 2 rpt Liquibase history+lock tables in agt_ops, found ${rbt:-0}." >&2
+    echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
+    exit 1
+  fi
+  sleep 5
+done
 
 echo "[8/13] clean exchange dirs, per-client tree (find -delete: zsh glob rm aborts on"
 echo "       empty dirs; tracked .gitkeep files are kept)"
