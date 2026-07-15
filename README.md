@@ -98,8 +98,8 @@ Stage images are built in each service repo, then loaded into the cluster; AGT (
 ```bash
 # In each stage-service repo: build, image, load
 ./gradlew bootJar && docker build -t dcre-SVC:TAG . && kind load docker-image --name dcre-dev dcre-SVC:TAG
-# AGT (Quarkus):
-./gradlew build && docker build -f src/main/docker/Dockerfile.jvm -t dcre-agt:TAG .
+# AGT (Quarkus, Alpine production image per the fleet's Alpine-only standing rule):
+./gradlew build && docker build -f src/main/docker/Dockerfile.jvm.prod -t dcre-agt:TAG .
 
 # Back here: switch the whole fleet to a release (never mixed versions)
 ./scripts/switch-version.sh 2.1.0
