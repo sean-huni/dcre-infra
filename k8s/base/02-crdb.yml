@@ -20,6 +20,9 @@ spec:
     - name: sql
       port: 26257
       targetPort: 26257
+    - name: db-console
+      port: 8080
+      targetPort: 8080
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -56,6 +59,7 @@ spec:
             - "--max-sql-memory=1024MiB"
           ports:
             - containerPort: 26257
+            - containerPort: 8080
           # Reserve memory so the scheduler stops overcommitting the node against
           # the DB. Request stays 2Gi (a 4Gi request would starve stage pods on an
           # 8Gi node); the 4Gi limit gives the ~2x-budget RSS headroom A-51 measured.
