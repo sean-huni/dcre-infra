@@ -21,7 +21,7 @@ Provides the two local environments the DCRE fleet (11 Spring Batch stage servic
 Client-first layout under the single exchange root: `exchange/<clientbase>/<channel>/<sub>`, with `clientbase` lowercase for each client in scope (`fnbcc01`, `fnbcc02`, `fnbrf01`). Each channel has its `in`/`out`/`error`/`archive` lifecycle subdirs:
 
 - `onhost-req` (in/error/archive): inbound copybooks; filenames carry client + MsgId; AGT watches `in`.
-- `onhost-req-endo` (in/error/archive): inbound ENDO/AIS DAG.
+- `onhost-req-endo` (in/error/archive): inbound ENDO Payments DAG (`CRR -> CTV -> AIS -> CIR`).
 - `onhost-resp` (out/error/archive): CIR/PRG output.
 - `fint-req` (out/error/archive): CRW pain.008; fint-sim consumes `out`.
 - `fint-resp` (in/error/archive): pain.002-family; fint-sim drops `in`; AGT watches.
