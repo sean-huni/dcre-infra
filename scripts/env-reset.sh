@@ -32,10 +32,21 @@ echo "[1/13] stop AGT first (watcher/reconciler/clocks must not write to a dropp
 kubectl scale deploy dcre-agt -n $NS --replicas=0
 kubectl wait --for=delete pod -l app=dcre-agt -n $NS --timeout=90s 2>/dev/null || true
 
-echo "[2/13] delete all Jobs and dcre-* pods (crdb-0 is NOT dcre-* prefixed: kept)"
-kubectl delete jobs -n $NS --all --wait=false
-kubectl get pods -n $NS --no-headers | awk '$1 ~ /^dcre-/ {print $1}' \
-  | xargs -r kubectl delete pod -n $NS --wait=false --grace-period=0
+echo "[2/13] delete all Jobs and stage pods across control + flow namespaces"
+echo "       (SCRUM-70: stage Jobs live in dcre-col/dcre-pay/dcre-man; crdb-0 in"
+echo "       $NS is NOT dcre-* prefixed: kept)"
+for ns in dcre dcre-col dcre-pay dcre-man; do
+  if [[ $ns == "$NS" ]]; then
+    kubectl delete jobs -n $ns --all --wait=false
+    kubectl get pods -n $ns --no-headers | awk '$1 ~ /^dcre-/ {print $1}' \
+      | xargs -r kubectl delete pod -n $ns --wait=false --grace-period=0
+  else
+    # Flow namespaces hold nothing but stage Jobs/pods; tolerate a cluster
+    # that predates the SCRUM-70 kustomize apply (namespace absent).
+    kubectl delete jobs -n $ns --all --wait=false 2>/dev/null || true
+    kubectl delete pods -n $ns --all --wait=false --grace-period=0 2>/dev/null || true
+  fi
+done
 
 echo "[3/13] stop fint-sim (a stale pre-restructure sim survives resets and keeps"
 echo "       writing the old flat paths; a fresh one restarts in step 13)"
