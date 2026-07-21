@@ -1,6 +1,8 @@
 #!/bin/zsh
-# Accuracy matrix: independent raw-SQL derivation (root, from BASE tables only) vs the rpt views
-# the T13 Grafana dashboards actually display (queried as the appropriate client / internal role).
+# Accuracy matrix: raw-SQL derivation (root, from BASE tables only) vs the rpt views the T13
+# Grafana dashboards actually display (queried as the appropriate client / internal role).
+# Independence caveat: the correlation-sensitive checks MIRROR the views' binding rules; see the
+# EFF honesty note below for which checks are logic mirrors vs independent recomputation.
 # Spec section 9 gate 4. Exit non-zero on any mismatch. This is an archived evidence artifact, so it
 # is fail-CLOSED: a check FAILS (never silently PASSES) if either side is empty or non-numeric.
 #
@@ -13,7 +15,7 @@
 #   rpt.v_funnel_daily    - ALL FOUR stages: SUBMITTED, CTV_PASS, EMITTED, SETTLED tx_count
 #   rpt.v_recon_daily     - control_sum; settled_sum; variance
 #   rpt.v_amount_buckets  - total tx_count; modal-bucket (E_5K_PLUS) count -> catches boundary misclass
-#   rpt.v_reason_daily    - PBSR-stage fail_count; CTV-stage fail_count
+#   rpt.v_reason_daily    - ISR/SBSR/PBSR terminal-non-success counts; CTV-stage fail_count
 #   agt_ops rpt.v_ops_stage_health - business_count total; tech_failed_count total (internal ops board)
 #
 # Deviations from the plan brief (all required to make the checks execute/pass/have-teeth on live CRDB):
@@ -34,18 +36,70 @@ SQLO=(kubectl -n dcre exec crdb-0 -- ./cockroach sql --insecure --format=csv --d
 fail=0
 num='^-?[0-9]+(\.[0-9]+)?$'   # integer/decimal, optional leading minus
 
-# Per-tx effective status + process_date, rebuilt from BASE tables exactly as rpt.v_tx computes them
-# (latest pbsr, else latest sbsr, else latest isr, else CTV outcome). Used by the debtor/cure checks
-# so their raw side never SELECTs from an rpt view (which would be circular).
-EFF="WITH lp AS (SELECT DISTINCT ON (e2e) e2e,status FROM pbsr_resp ORDER BY e2e,created_at DESC),\
- ls AS (SELECT DISTINCT ON (e2e) e2e,status FROM sbsr_resp ORDER BY e2e,created_at DESC),\
- li AS (SELECT DISTINCT ON (e2e) e2e,status FROM isr_resp ORDER BY e2e,created_at DESC),\
- eff AS (SELECT h.client_token AS client, t.debtor_account, t.amount,\
-   (substr(h.business_date,1,4)||'-'||substr(h.business_date,5,2)||'-'||substr(h.business_date,7,2))::DATE AS process_date,\
-   COALESCE(lp.status, ls.status, li.status, CASE WHEN v.outcome='PASS' THEN 'CTV_PASS' ELSE v.outcome END) AS status\
-   FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id\
-   LEFT JOIN validation_log v ON v.arrival_id=t.arrival_id AND v.sequence=t.sequence\
-   LEFT JOIN lp ON lp.e2e=t.e2e LEFT JOIN ls ON ls.e2e=t.e2e LEFT JOIN li ON li.e2e=t.e2e)"
+# Per-tx effective status + process_date, rebuilt from BASE tables with the SAME correlation rules
+# the corrected views encode. HONESTY NOTE: because this CTE re-encodes those rules, every check
+# built on it is a LOGIC MIRROR of the correlation-sensitive views: it verifies tenancy scoping and
+# aggregation coverage, not the binding rules themselves. Genuinely independent recomputation is
+# limited to the checks that read base tables WITHOUT this CTE AND without re-encoding a corrected
+# rule: tx counts, CTV fail counts, funnel SUBMITTED/CTV_PASS, recon control_sum, p95, bucket
+# counts, the ops checks and the internal-total integrity check. Funnel EMITTED is ALSO a logic
+# mirror: its raw side re-encodes the corrected (arrival_id,sequence,e2e) member-binding predicate
+# even though it skips this CTE.
+# Mirrored rules: the CURRENT emission per (arrival_id,sequence,e2e) is the latest
+# (run_date,batch_ordinal); resolved rows bind by (emission_id,e2e); legacy NULL-emission rows bind
+# ONLY via crw_emission.outbound_msg_id=orgnl_msg_id (fail-closed: rows with neither identity are
+# excluded; there is NO parent MsgId-family fallback). Within a leg, resolved rows outrank legacy
+# twins, then latest created_at/response_file wins; across legs ONE winning leg is picked
+# (PBSR > SBSR > ISR, else CTV) and status/reason/stage all come from that same leg.
+EFF="WITH member_emission AS (\
+ SELECT DISTINCT ON (e.arrival_id,m.sequence,m.e2e)\
+ e.arrival_id,m.sequence,m.e2e,e.id AS emission_id\
+ FROM crw_emission e JOIN crw_emission_member m ON m.emission_id=e.id\
+ ORDER BY e.arrival_id,m.sequence,m.e2e,e.run_date DESC,e.batch_ordinal DESC),\
+ isr_candidates AS (\
+ SELECT r.emission_id,r.e2e,r.status,r.reason,r.created_at,r.response_file,true AS resolved\
+ FROM isr_resp r WHERE r.emission_id IS NOT NULL\
+ UNION ALL SELECT e.id,r.e2e,r.status,r.reason,r.created_at,r.response_file,false\
+ FROM isr_resp r JOIN crw_emission e ON e.outbound_msg_id=r.orgnl_msg_id\
+ WHERE r.emission_id IS NULL),\
+ isr_pick AS (SELECT emission_id,e2e,status,reason,created_at FROM (\
+ SELECT c.*,row_number() OVER (PARTITION BY emission_id,e2e\
+ ORDER BY resolved DESC,created_at DESC,response_file DESC) AS rn FROM isr_candidates c) AS ranked WHERE rn=1),\
+ sbsr_candidates AS (\
+ SELECT r.emission_id,r.e2e,r.status,r.reason,r.created_at,r.response_file,true AS resolved\
+ FROM sbsr_resp r WHERE r.emission_id IS NOT NULL\
+ UNION ALL SELECT e.id,r.e2e,r.status,r.reason,r.created_at,r.response_file,false\
+ FROM sbsr_resp r JOIN crw_emission e ON e.outbound_msg_id=r.orgnl_msg_id\
+ WHERE r.emission_id IS NULL),\
+ sbsr_pick AS (SELECT emission_id,e2e,status,reason,created_at FROM (\
+ SELECT c.*,row_number() OVER (PARTITION BY emission_id,e2e\
+ ORDER BY resolved DESC,created_at DESC,response_file DESC) AS rn FROM sbsr_candidates c) AS ranked WHERE rn=1),\
+ pbsr_candidates AS (\
+ SELECT r.emission_id,r.e2e,r.status,r.reason,r.created_at,r.response_file,true AS resolved\
+ FROM pbsr_resp r WHERE r.emission_id IS NOT NULL\
+ UNION ALL SELECT e.id,r.e2e,r.status,r.reason,r.created_at,r.response_file,false\
+ FROM pbsr_resp r JOIN crw_emission e ON e.outbound_msg_id=r.orgnl_msg_id\
+ WHERE r.emission_id IS NULL),\
+ pbsr_pick AS (SELECT emission_id,e2e,status,reason,created_at FROM (\
+ SELECT c.*,row_number() OVER (PARTITION BY emission_id,e2e\
+ ORDER BY resolved DESC,created_at DESC,response_file DESC) AS rn FROM pbsr_candidates c) AS ranked WHERE rn=1),\
+ eff AS (SELECT h.client_token AS client,t.arrival_id,t.sequence,t.e2e,me.emission_id,\
+ t.debtor_account,t.amount,v.outcome AS ctv_outcome,\
+ (substr(h.business_date,1,4)||'-'||substr(h.business_date,5,2)||'-'||substr(h.business_date,7,2))::DATE AS process_date,\
+ COALESCE(pp.status,sp.status,ip.status,\
+ CASE WHEN v.outcome='PASS' THEN 'CTV_PASS' ELSE v.outcome END) AS status,\
+ CASE WHEN pp.status IS NOT NULL THEN pp.reason\
+      WHEN sp.status IS NOT NULL THEN sp.reason\
+      WHEN ip.status IS NOT NULL THEN ip.reason ELSE v.outcome END AS reason,\
+ CASE WHEN pp.status IS NOT NULL THEN 'PBSR'\
+      WHEN sp.status IS NOT NULL THEN 'SBSR'\
+      WHEN ip.status IS NOT NULL THEN 'ISR' ELSE 'CTV' END AS stage\
+ FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id\
+ LEFT JOIN validation_log v ON v.arrival_id=t.arrival_id AND v.sequence=t.sequence\
+ LEFT JOIN member_emission me ON me.arrival_id=t.arrival_id AND me.sequence=t.sequence AND me.e2e=t.e2e\
+ LEFT JOIN isr_pick ip ON ip.emission_id=me.emission_id AND ip.e2e=t.e2e\
+ LEFT JOIN sbsr_pick sp ON sp.emission_id=me.emission_id AND sp.e2e=t.e2e\
+ LEFT JOIN pbsr_pick pp ON pp.emission_id=me.emission_id AND pp.e2e=t.e2e)"
 
 check() {  # label, expected_sql(root, raw BASE), actual_sql(role, view), role, [cmd-array-name=SQL]
   local label=$1 esql=$2 asql=$3 role=$4 cmdvar=${5:-SQL}
@@ -62,25 +116,31 @@ check() {  # label, expected_sql(root, raw BASE), actual_sql(role, view), role, 
 for C in FNBCC01 FNBCC02 FNBRF01; do
   R=${C:l}
   check "$C total settled amount" \
-    "SELECT COALESCE(sum(t.amount),0) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id JOIN (SELECT DISTINCT ON (e2e) e2e,status FROM pbsr_resp ORDER BY e2e,created_at DESC) p ON p.e2e=t.e2e WHERE h.client_token='$C' AND p.status='ACSC'" \
+    "$EFF SELECT COALESCE(sum(amount),0) FROM eff WHERE client='$C' AND status IN ('ACSC','ACCC')" \
     "SELECT COALESCE(sum(settled_amount),0) FROM rpt.v_tx_daily" "$R"
   check "$C tx count" \
     "SELECT count(*) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id WHERE h.client_token='$C'" \
     "SELECT COALESCE(sum(tx_count),0) FROM rpt.v_tx_daily" "$R"
-  check "$C PBSR reject count" \
-    "SELECT count(*) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id JOIN (SELECT DISTINCT ON (e2e) e2e,status FROM pbsr_resp ORDER BY e2e,created_at DESC) p ON p.e2e=t.e2e WHERE h.client_token='$C' AND p.status='RJCT'" \
+  check "$C ISR terminal non-success count" \
+    "$EFF SELECT count(*) FROM eff WHERE client='$C' AND stage='ISR' AND status IN ('RJCT','CANC')" \
+    "SELECT COALESCE(sum(fail_count),0) FROM rpt.v_reason_daily WHERE stage='ISR'" "$R"
+  check "$C SBSR terminal non-success count" \
+    "$EFF SELECT count(*) FROM eff WHERE client='$C' AND stage='SBSR' AND status IN ('RJCT','CANC')" \
+    "SELECT COALESCE(sum(fail_count),0) FROM rpt.v_reason_daily WHERE stage='SBSR'" "$R"
+  check "$C PBSR terminal non-success count" \
+    "$EFF SELECT count(*) FROM eff WHERE client='$C' AND stage='PBSR' AND status IN ('RJCT','CANC')" \
     "SELECT COALESCE(sum(fail_count),0) FROM rpt.v_reason_daily WHERE stage='PBSR'" "$R"
   check "$C reason CTV fail count" \
     "SELECT count(*) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id JOIN validation_log v ON v.arrival_id=t.arrival_id AND v.sequence=t.sequence WHERE h.client_token='$C' AND v.outcome LIKE 'FAIL%'" \
     "SELECT COALESCE(sum(fail_count),0) FROM rpt.v_reason_daily WHERE stage='CTV'" "$R"
   check "$C debtor failed count" \
-    "$EFF SELECT count(*) FROM eff WHERE client='$C' AND (status='RJCT' OR status LIKE 'FAIL%')" \
+    "$EFF SELECT count(*) FROM eff WHERE client='$C' AND (status IN ('RJCT','CANC') OR ctv_outcome LIKE 'FAIL%')" \
     "SELECT COALESCE(sum(failed_count),0) FROM rpt.v_debtor_daily" "$R"
   check "$C debtor top failed amount" \
-    "$EFF SELECT COALESCE(max(s),0) FROM (SELECT sum(amount) s FROM eff WHERE client='$C' AND (status='RJCT' OR status LIKE 'FAIL%') GROUP BY debtor_account, process_date)" \
+    "$EFF SELECT COALESCE(max(s),0) FROM (SELECT sum(amount) s FROM eff WHERE client='$C' AND (status IN ('RJCT','CANC') OR ctv_outcome LIKE 'FAIL%') GROUP BY debtor_account, process_date)" \
     "SELECT COALESCE(max(failed_amount),0) FROM rpt.v_debtor_daily" "$R"
   check "$C cure cured count (expect 0 -> panel empty is correct)" \
-    "$EFF SELECT count(*) FROM eff f WHERE f.client='$C' AND (f.status='RJCT' OR f.status LIKE 'FAIL%') AND EXISTS (SELECT 1 FROM eff s WHERE s.client=f.client AND s.debtor_account=f.debtor_account AND s.status='ACSC' AND s.process_date > f.process_date)" \
+    "$EFF SELECT count(*) FROM eff f WHERE f.client='$C' AND (f.status IN ('RJCT','CANC') OR f.ctv_outcome LIKE 'FAIL%') AND EXISTS (SELECT 1 FROM eff s WHERE s.client=f.client AND s.debtor_account=f.debtor_account AND s.status IN ('ACSC','ACCC') AND s.process_date > f.process_date)" \
     "SELECT count(*) FROM rpt.v_cure WHERE days_to_cure IS NOT NULL" "$R"
   check "$C funnel SUBMITTED" \
     "SELECT count(*) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id WHERE h.client_token='$C'" \
@@ -89,19 +149,19 @@ for C in FNBCC01 FNBCC02 FNBRF01; do
     "SELECT count(*) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id JOIN validation_log v ON v.arrival_id=t.arrival_id AND v.sequence=t.sequence WHERE h.client_token='$C' AND v.outcome='PASS'" \
     "SELECT COALESCE(sum(tx_count),0) FROM rpt.v_funnel_daily WHERE stage='CTV_PASS'" "$R"
   check "$C funnel EMITTED" \
-    "SELECT count(*) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id WHERE h.client_token='$C' AND EXISTS(SELECT 1 FROM crw_emission_member m WHERE m.e2e=t.e2e)" \
+    "SELECT count(*) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id WHERE h.client_token='$C' AND EXISTS(SELECT 1 FROM crw_emission e JOIN crw_emission_member m ON m.emission_id=e.id WHERE e.arrival_id=t.arrival_id AND m.sequence=t.sequence AND m.e2e=t.e2e)" \
     "SELECT COALESCE(sum(tx_count),0) FROM rpt.v_funnel_daily WHERE stage='EMITTED'" "$R"
   check "$C funnel SETTLED" \
-    "SELECT count(*) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id JOIN (SELECT DISTINCT ON (e2e) e2e,status FROM pbsr_resp ORDER BY e2e,created_at DESC) p ON p.e2e=t.e2e WHERE h.client_token='$C' AND p.status='ACSC'" \
+    "$EFF SELECT count(*) FROM eff WHERE client='$C' AND status IN ('ACSC','ACCC')" \
     "SELECT COALESCE(sum(tx_count),0) FROM rpt.v_funnel_daily WHERE stage='SETTLED'" "$R"
   check "$C recon control sum" \
     "SELECT COALESCE(sum(cm.amount),0) FROM crw_emission_member cm JOIN crw_emission ce ON ce.id=cm.emission_id JOIN tx_header h ON h.arrival_id=ce.arrival_id WHERE h.client_token='$C'" \
     "SELECT COALESCE(sum(control_sum),0) FROM rpt.v_recon_daily" "$R"
   check "$C recon settled sum" \
-    "SELECT COALESCE(sum(cm.amount),0) FROM crw_emission_member cm JOIN crw_emission ce ON ce.id=cm.emission_id JOIN tx_header h ON h.arrival_id=ce.arrival_id JOIN (SELECT DISTINCT ON (e2e) e2e,status FROM pbsr_resp ORDER BY e2e,created_at DESC) p ON p.e2e=cm.e2e WHERE h.client_token='$C' AND p.status='ACSC'" \
+    "$EFF SELECT COALESCE(sum(cm.amount) FILTER (WHERE p.status IN ('ACSC','ACCC')),0) FROM crw_emission_member cm JOIN crw_emission ce ON ce.id=cm.emission_id JOIN tx_header h ON h.arrival_id=ce.arrival_id LEFT JOIN pbsr_pick p ON p.emission_id=cm.emission_id AND p.e2e=cm.e2e WHERE h.client_token='$C'" \
     "SELECT COALESCE(sum(settled_sum),0) FROM rpt.v_recon_daily" "$R"
   check "$C recon variance" \
-    "SELECT COALESCE(sum(cm.amount),0)-COALESCE(sum(cm.amount) FILTER (WHERE p.status='ACSC'),0) FROM crw_emission_member cm JOIN crw_emission ce ON ce.id=cm.emission_id JOIN tx_header h ON h.arrival_id=ce.arrival_id LEFT JOIN (SELECT DISTINCT ON (e2e) e2e,status FROM pbsr_resp ORDER BY e2e,created_at DESC) p ON p.e2e=cm.e2e WHERE h.client_token='$C'" \
+    "$EFF SELECT COALESCE(sum(cm.amount),0)-COALESCE(sum(cm.amount) FILTER (WHERE p.status IN ('ACSC','ACCC')),0) FROM crw_emission_member cm JOIN crw_emission ce ON ce.id=cm.emission_id JOIN tx_header h ON h.arrival_id=ce.arrival_id LEFT JOIN pbsr_pick p ON p.emission_id=cm.emission_id AND p.e2e=cm.e2e WHERE h.client_token='$C'" \
     "SELECT COALESCE(sum(variance),0) FROM rpt.v_recon_daily" "$R"
   check "$C p95 amount" \
     "SELECT percentile_cont(0.95::FLOAT8) WITHIN GROUP (ORDER BY t.amount::FLOAT8) FROM tx_entry t JOIN tx_header h ON h.arrival_id=t.arrival_id WHERE h.client_token='$C'" \
