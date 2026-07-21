@@ -63,7 +63,7 @@ Host ports:
 | Grafana | 3000 | 3001 (`scripts/lgtm-forward.sh`) |
 | OTLP gRPC / HTTP | 4317 / 4318 | in-cluster `svc/lgtm` |
 
-Databases `dcre_collections` and `agt_ops` are created by `scripts/crdb-init.sql` (guarded, never DROP) in both environments.
+Databases `dcre_col` and `agt_ops` are created by `scripts/crdb-init.sql` (guarded, never DROP) in both environments.
 
 ## Configuration
 
@@ -71,7 +71,7 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DCRE_DB_URL` | `jdbc:postgresql://localhost:26257/dcre_collections?sslmode=disable` | Stage-service JDBC URL |
+| `DCRE_DB_URL` | `jdbc:postgresql://localhost:26257/dcre_col?sslmode=disable` | Stage-service JDBC URL |
 | `AGT_DB_URL` | `jdbc:postgresql://localhost:26257/agt_ops?sslmode=disable` | AGT ops JDBC URL |
 | `DCRE_EXCHANGE_ROOT` | `./exchange` | Single exchange root; the per-client tree lives under it |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP ingest (LGTM) |
@@ -90,10 +90,10 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `rpt-accuracy-check.sh` | 54-check accuracy matrix: independent raw-SQL derivation from base tables (as `root`) vs the rpt views the dashboards display (as each client / `rpt_internal`); fail-closed (empty/non-numeric FAILS), exits non-zero on any mismatch (spec gate) |
 | `rpt-security-probes.sh` | Negative security probes: grants wall (client role denied on `public.*` and ops views, asserting SQLSTATE 42501) plus per-view cross-client scoping and a non-emptiness canary; exits non-zero on any unexpected access |
 | `grafana-screenshots.mjs` | Playwright (headless chromium) evidence capture: logs in as each org user and screenshots every dashboard, proving per-client isolation and full panel rendering (tall viewport so lazy panels paint). Manifest: `scripts/package.json` |
-| `env-reset.sh [--seed accounts.sql mandates.sql]` | 13-step clean slate: stop AGT, delete Jobs/pods, stop fint-sim, drop+recreate both DBs, drain CRDB schema-change jobs, pre-seed and verify all 26 Liquibase history+lock tables (24 in `dcre_collections`, 2 `rpt_*` in `agt_ops`), clean the exchange, restart AGT, optional reference reseed, warm-up drops per route, post-checks, restart fint-sim |
+| `env-reset.sh [--seed accounts.sql mandates.sql]` | 13-step clean slate: stop AGT, delete Jobs/pods, stop fint-sim, drop+recreate both DBs, drain CRDB schema-change jobs, pre-seed and verify all 26 Liquibase history+lock tables (24 in `dcre_col`, 2 `rpt_*` in `agt_ops`), clean the exchange, restart AGT, optional reference reseed, warm-up drops per route, post-checks, restart fint-sim |
 | `switch-version.sh <1.0\|1.1\|2.0\|2.0.1\|2.1.0>` | Fleet-wide release switch: sets the AGT image and every `AGT_<STAGE>_IMAGE` env (CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS); refuses 2.x to 1.x, 2.0.1 to 2.0, and any downgrade off 2.1.x |
 | `fint-sim.sh` + `fint_sim_reply.py` | Fintegrate simulator: per client, polls `fint-req/out` for `*_PAIN008.xml`, replies with `{client}_{msgId}_ISR/SBSR/PBSR.xml` into `fint-resp/in` (atomic tmp+rename; every 4th tx RJCT with Rsn AC04), archives the request |
-| `crdb-init.sql` | Guarded creation of `dcre_collections` and `agt_ops` |
+| `crdb-init.sql` | Guarded creation of `dcre_col` and `agt_ops` |
 | `seed-liquibase-history.sql` | Pre-creates every module's Liquibase history+lock tables (first-run bootstrap-race guard, idempotent) |
 | `file-trace-query.sql` | The saved cross-DB file-name killer query (SCRUM-58): resolve ANY boundary filename to client/direction/kind/route + ordered step timeline. Run as `rpt_internal`; substitute `:fname`. See the trace runbook below |
 | `audit-file-trace.sh` | Trace-resolution audit gate (SCRUM-58): every exchange file must resolve to >= 1 row from the killer query; exits non-zero listing any untraceable file. Called by the chaos harness as a post-run gate step |
@@ -148,7 +148,7 @@ The captured M8 evidence (accuracy matrix, security probes, per-client screensho
 
 ## File-name trace (SCRUM-58 prod-support runbook)
 
-A prod supporter who holds ANY boundary file name resolves it, in one saved query, to the client, direction, kind (format), route and the ordered step timeline. Owner modules persist every inbound and outbound file name write-ahead in their own tables; the `dcre-rpt` service owns two normalizing view pairs (`dcre_collections.rpt.v_file_index` / `rpt.v_flow_trace` and `agt_ops.rpt.v_ops_file_index` / `rpt.v_ops_flow`); the killer query in `scripts/file-trace-query.sql` unions them across both databases.
+A prod supporter who holds ANY boundary file name resolves it, in one saved query, to the client, direction, kind (format), route and the ordered step timeline. Owner modules persist every inbound and outbound file name write-ahead in their own tables; the `dcre-rpt` service owns two normalizing view pairs (`dcre_col.rpt.v_file_index` / `rpt.v_flow_trace` and `agt_ops.rpt.v_ops_file_index` / `rpt.v_ops_flow`); the killer query in `scripts/file-trace-query.sql` unions them across both databases.
 
 **Why a saved statement and not a view:** a persisted cross-DB view needs the deprecated cluster-wide `sql.cross_db_views.enabled`, which stays OFF on the shared cluster. Ad-hoc 3-part-name (`<db>.rpt.<view>`) cross-DB SELECTs work by default, so the query runs from any database in the cluster.
 
@@ -160,11 +160,11 @@ FNAME='FNBCC01_DCRECC2026071410000001_onhost-req_RESP.txt'
 
 # kind cluster:
 sed "s/:fname/'${FNAME}'/g" scripts/file-trace-query.sql \
-  | kubectl -n dcre exec -i crdb-0 -- ./cockroach sql --insecure --user=rpt_internal --database=dcre_collections
+  | kubectl -n dcre exec -i crdb-0 -- ./cockroach sql --insecure --user=rpt_internal --database=dcre_col
 
 # compose inner loop (CRDB on :26257):
 sed "s/:fname/'${FNAME}'/g" scripts/file-trace-query.sql \
-  | cockroach sql --insecure --host=localhost:26257 --user=rpt_internal --database=dcre_collections
+  | cockroach sql --insecure --host=localhost:26257 --user=rpt_internal --database=dcre_col
 ```
 
 The `--database` is passed explicitly (ops-scripting discipline); the query itself resolves everything through fully-qualified 3-part names, so the connected database is otherwise irrelevant. The result is one ordered set: client, direction, kind, route, state, then the step timeline (`ARRIVED`/`QUARANTINED`/`DUPLICATE_REDELIVERY` and `<STAGE>_INTENDED`/`<STAGE>_<OUTCOME>` from the ops side interleaved with `CRR_INGESTED` -> `CTV_VALIDATED` -> `CIR_RESP_STAGED`/`WRITTEN` -> `CRW_PLANNED`/`CRW_VISIBLE` -> `IXR`/`SXR`/`PXR_REPLY` -> `PRG_REPORTED` -> `RPT_OUTCOME` from the business side).
@@ -177,7 +177,7 @@ The `--database` is passed explicitly (ops-scripting discipline); the query itse
 scripts/audit-file-trace.sh || { echo "trace-resolution gate failed"; exit 1; }
 ```
 
-Config is 12-factor (committed defaults target the kind cluster, matching `rpt-security-probes.sh`): `DCRE_EXCHANGE_ROOT` (or first arg), `DCRE_COCKROACH` (connection command prefix), `CRDB_USER` (default `rpt_internal`), `CRDB_DATABASE` (default `dcre_collections`). Exit codes: `0` all files resolve, `1` one or more unresolved, `2` config error, `3` query/connection failure (fails closed -- a dead DB never false-passes). Override the connection for the inner loop, e.g. `DCRE_COCKROACH="cockroach sql --insecure --host=localhost:26257"`.
+Config is 12-factor (committed defaults target the kind cluster, matching `rpt-security-probes.sh`): `DCRE_EXCHANGE_ROOT` (or first arg), `DCRE_COCKROACH` (connection command prefix), `CRDB_USER` (default `rpt_internal`), `CRDB_DATABASE` (default `dcre_col`). Exit codes: `0` all files resolve, `1` one or more unresolved, `2` config error, `3` query/connection failure (fails closed -- a dead DB never false-passes). Override the connection for the inner loop, e.g. `DCRE_COCKROACH="cockroach sql --insecure --host=localhost:26257"`.
 
 **Honest limitations (no backfill, by design):** pre-feature CIR RESP names and pre-feature duplicate re-deliveries stay as dark as they are today; legacy files of every other class trace immediately from existing owner columns. Dev-only `local-<svc>-<executionId>` seam names of the non-rpt modules are self-describing into batch metadata but are NOT killer-query-resolvable (only rpt's seam names are, via `rpt_run`).
 

@@ -54,9 +54,9 @@ pkill -f fint-sim 2>/dev/null || true
 
 echo "[4/13] drop + recreate both databases"
 kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -e "
-  DROP DATABASE IF EXISTS dcre_collections CASCADE;
+  DROP DATABASE IF EXISTS dcre_col CASCADE;
   DROP DATABASE IF EXISTS agt_ops CASCADE;
-  CREATE DATABASE dcre_collections;
+  CREATE DATABASE dcre_col;
   CREATE DATABASE agt_ops;"
 
 echo "[5/13] drain async schema-change jobs (DROP ... CASCADE returns while its jobs"
@@ -77,17 +77,17 @@ done
 
 echo "[6/13] pre-seed Liquibase history+lock tables, ONLY after the drain"
 echo "       (first-run bootstrap-race guard; idempotent IF NOT EXISTS)"
-kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_collections \
+kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_col \
   < $INFRA/scripts/seed-liquibase-history.sql > /dev/null
 
 echo "[7/13] verify all 24 history+lock tables exist BEFORE any service comes back"
 typeset -i vguard=0
 while :; do
-  lbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_collections] WHERE table_name LIKE '%databasechangelog%';") || lbt=""
+  lbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_col] WHERE table_name LIKE '%databasechangelog%';") || lbt=""
   [[ "$lbt" == "24" ]] && break
   vguard+=1
   if (( vguard > 6 )); then
-    echo "ERROR: expected 24 Liquibase history+lock tables in dcre_collections, found ${lbt:-0}." >&2
+    echo "ERROR: expected 24 Liquibase history+lock tables in dcre_col, found ${lbt:-0}." >&2
     echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
     exit 1
   fi
@@ -124,11 +124,11 @@ if [[ -n "$SEED_ACCOUNTS" ]]; then
     [[ -f $f ]] || { echo "ERROR: seed file not found: $f" >&2; exit 1; }
   done
   echo "        seeding accounts from $SEED_ACCOUNTS ($(wc -l < $SEED_ACCOUNTS | tr -d ' ') lines; large seeds take minutes)..."
-  kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections < $SEED_ACCOUNTS > /dev/null
-  echo "        accounts file done: $(sqlval 'SELECT count(*) FROM account;' dcre_collections) rows in account"
+  kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure -d dcre_col < $SEED_ACCOUNTS > /dev/null
+  echo "        accounts file done: $(sqlval 'SELECT count(*) FROM account;' dcre_col) rows in account"
   echo "        seeding mandates from $SEED_MANDATES ($(wc -l < $SEED_MANDATES | tr -d ' ') lines)..."
-  kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections < $SEED_MANDATES > /dev/null
-  echo "        mandates file done: $(sqlval 'SELECT count(*) FROM mandate;' dcre_collections) rows in mandate"
+  kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure -d dcre_col < $SEED_MANDATES > /dev/null
+  echo "        mandates file done: $(sqlval 'SELECT count(*) FROM mandate;' dcre_col) rows in mandate"
 else
   echo "        skipped (no --seed): load accounts/mandates SQL before real fixtures"
 fi
@@ -150,7 +150,7 @@ cp $INFRA/fixtures/warmup/FNBRF01_DCRERF2026071120020002.txt $WARM_ENDO_IN/
 if [[ -n "$SEED_ACCOUNTS" ]]; then
   echo "        verifying account/mandate exist (created by the seed DDL in step 10)..."
   typeset -i guard=0
-  until kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections \
+  until kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -d dcre_col \
         -e "SELECT 1 FROM account LIMIT 1; SELECT 1 FROM mandate LIMIT 1;" >/dev/null 2>&1; do
     sleep 10; guard+=1
     (( guard > 60 )) && { echo "ERROR: reference tables missing after 10min despite seed" >&2; exit 1; }
@@ -164,7 +164,7 @@ echo "[12/13] post-checks + reset stamp"
 typeset -i hguard=0
 ph=""
 while :; do
-  ph=$(sqlval "SELECT count(*) FROM public_holiday;" dcre_collections) || ph=""
+  ph=$(sqlval "SELECT count(*) FROM public_holiday;" dcre_col) || ph=""
   [[ -n "$ph" && "$ph" != "0" ]] && break
   hguard+=1
   (( hguard > 12 )) && break
@@ -175,11 +175,11 @@ if [[ -z "$ph" || "$ph" == "0" ]]; then
 else
   echo "        public_holiday: $ph rows (HCS re-synced)"
 fi
-so=$(sqlval "SELECT count(*) FROM stage_outcome;" dcre_collections) || so=""
+so=$(sqlval "SELECT count(*) FROM stage_outcome;" dcre_col) || so=""
 echo "        stage_outcome baseline: ${so:-n/a} rows. Transient CRW TECH_FAILED clock"
 echo "        windows between AGT-up and the first CDE run (minting cde_schedule) are"
 echo "        EXPECTED; subtract this baseline in later pass-rate accounting."
-kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -d dcre_collections --format=csv -e "
+kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -d dcre_col --format=csv -e "
   SELECT (SELECT count(*) FROM account) accounts, (SELECT count(*) FROM mandate) mandates;"
 date +%s > $EX/.reset-stamp
 echo "        reset stamp written: $EX/.reset-stamp ($(cat $EX/.reset-stamp))"

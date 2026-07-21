@@ -31,7 +31,7 @@
 #      - so this check asserts the cured count, which is the honest 0==0 the brief intended.
 set -e
 cd "$(dirname "$0")/.."
-SQL=(kubectl -n dcre exec crdb-0 -- ./cockroach sql --insecure --format=csv --database=dcre_collections)
+SQL=(kubectl -n dcre exec crdb-0 -- ./cockroach sql --insecure --format=csv --database=dcre_col)
 SQLO=(kubectl -n dcre exec crdb-0 -- ./cockroach sql --insecure --format=csv --database=agt_ops)
 fail=0
 num='^-?[0-9]+(\.[0-9]+)?$'   # integer/decimal, optional leading minus

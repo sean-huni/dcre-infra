@@ -14,7 +14,7 @@ fail=0
 # non-zero exit: a dropped role / renamed pod / down forward would exit non-zero
 # and false-PASS a security assertion. Capture combined output; PASS only if it
 # contains 42501. `|| true` keeps set -e from aborting on the (expected) exit 1.
-out=$($SQL --user=fnbcc01 --database=dcre_collections -e "SELECT count(*) FROM public.tx_entry" 2>&1) || true
+out=$($SQL --user=fnbcc01 --database=dcre_col -e "SELECT count(*) FROM public.tx_entry" 2>&1) || true
 if [[ "$out" == *42501* ]]; then
   echo "PASS: fnbcc01 denied on public.tx_entry"
 else
@@ -22,8 +22,8 @@ else
 fi
 
 # 2. cross-client scoping on every rpt view
-for v in $($SQL --database=dcre_collections -e "SELECT table_name FROM information_schema.views WHERE table_schema='rpt'" | tail -n +2); do
-  n=$($SQL --user=fnbcc01 --database=dcre_collections -e "SELECT count(*) FROM rpt.${v} WHERE client <> 'FNBCC01'" | tail -1)
+for v in $($SQL --database=dcre_col -e "SELECT table_name FROM information_schema.views WHERE table_schema='rpt'" | tail -n +2); do
+  n=$($SQL --user=fnbcc01 --database=dcre_col -e "SELECT count(*) FROM rpt.${v} WHERE client <> 'FNBCC01'" | tail -1)
   if [[ "$n" != "0" ]]; then echo "FAIL: rpt.${v} leaked ${n} foreign rows to fnbcc01"; fail=1
   else echo "PASS: rpt.${v} scoped for fnbcc01"; fi
 done
@@ -33,8 +33,8 @@ done
 # would still PASS. Assert fnbcc01 actually SEES its own rows in the two views
 # guaranteed non-empty for a client with transactions. Only these two qualify:
 # v_cure / v_recon can legitimately be empty for a client, so are NOT canaries.
-ntx=$($SQL --user=fnbcc01 --database=dcre_collections -e "SELECT count(*) FROM rpt.v_tx" | tail -1)
-ntd=$($SQL --user=fnbcc01 --database=dcre_collections -e "SELECT count(*) FROM rpt.v_tx_daily" | tail -1)
+ntx=$($SQL --user=fnbcc01 --database=dcre_col -e "SELECT count(*) FROM rpt.v_tx" | tail -1)
+ntd=$($SQL --user=fnbcc01 --database=dcre_col -e "SELECT count(*) FROM rpt.v_tx_daily" | tail -1)
 if [[ "$ntx" -gt 0 && "$ntd" -gt 0 ]]; then
   echo "PASS: fnbcc01 canary non-empty (v_tx=${ntx}, v_tx_daily=${ntd})"
 else
@@ -42,7 +42,7 @@ else
 fi
 
 # 3. internal sees all clients
-n=$($SQL --user=rpt_internal --database=dcre_collections -e "SELECT count(DISTINCT client) FROM rpt.v_tx" | tail -1)
+n=$($SQL --user=rpt_internal --database=dcre_col -e "SELECT count(DISTINCT client) FROM rpt.v_tx" | tail -1)
 [[ "$n" == "3" ]] && echo "PASS: rpt_internal sees 3 clients" || { echo "FAIL: rpt_internal sees ${n}"; fail=1; }
 
 # 4. client role blind on ops views (fail-closed: no grant AND predicate).
