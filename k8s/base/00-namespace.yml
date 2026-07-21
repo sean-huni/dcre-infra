@@ -4,3 +4,29 @@ metadata:
   name: dcre
   labels:
     app.kubernetes.io/part-of: dcre
+---
+# SCRUM-70: flow namespaces (spec 2026-07-21-flow-taxonomy-mandates-design.md
+# section 1 item 3). AGT stays in the control namespace `dcre` (with crdb +
+# lgtm shared infra) and launches stage Jobs into the flow namespace of the
+# route family: col- Jobs -> dcre-col, pay- Jobs -> dcre-pay, man- Jobs ->
+# dcre-man (dormant until M10).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dcre-col
+  labels:
+    app.kubernetes.io/part-of: dcre
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dcre-pay
+  labels:
+    app.kubernetes.io/part-of: dcre
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dcre-man
+  labels:
+    app.kubernetes.io/part-of: dcre

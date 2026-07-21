@@ -14,8 +14,8 @@ set -euo pipefail
 
 VERSION=${1:-}
 case "$VERSION" in
-  1.0|1.1|2.0|2.0.1|2.1.0) ;;
-  *) echo "usage: $0 <1.0|1.1|2.0|2.0.1|2.1.0>" >&2; exit 64 ;;
+  1.0|1.1|2.0|2.0.1|2.1.0|2.2.0) ;;
+  *) echo "usage: $0 <1.0|1.1|2.0|2.0.1|2.1.0|2.2.0>" >&2; exit 64 ;;
 esac
 
 NS=dcre
@@ -41,6 +41,20 @@ if [[ "$CURRENT" == 2.1* && "$VERSION" != 2.1* ]]; then
   exit 65
 fi
 
+# 2.2 guard (SCRUM-70, one-directional): 2.2 launches stage Jobs into the flow
+# namespaces (dcre-col/dcre-pay/dcre-man). A pre-2.2 AGT only watches namespace
+# dcre: it cannot see still-running col-/pay- Jobs, so after REAP_GRACE it would
+# relaunch duplicates of live work = concurrent same-identity execution.
+if [[ "$CURRENT" == 2.2* && "$VERSION" != 2.2* ]]; then
+  echo "REFUSED: downgrade from $CURRENT to $VERSION (flow namespaces: pre-2.2 AGT" >&2
+  echo "cannot see col-/pay-/man- Jobs and would duplicate-launch running work)" >&2
+  exit 65
+fi
+
+# SCRUM-70 cutover: the AGT deployment must roll Recreate-style (strategy:
+# Recreate in 10-agt-deployment.yml, i.e. old pod fully down before the new one
+# starts) - NEVER RollingUpdate: two concurrent AGTs with different namespace
+# views double-launch the same intents.
 kubectl set image -n $NS deploy/dcre-agt agt=dcre-agt:$VERSION
 for s in $STAGES; do
   kubectl set env -n $NS deploy/dcre-agt AGT_${s}_IMAGE=dcre-${(L)s}:$VERSION

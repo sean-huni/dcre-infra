@@ -4,6 +4,10 @@ metadata:
   name: dcre-agt
   namespace: dcre
 ---
+# Control-namespace Role/RoleBinding. After the SCRUM-70 cutover AGT launches
+# stage Jobs into the flow namespaces only, so it manages nothing here any
+# more; this fallback path stays until the M9 delivery gate (T7) proves the
+# flow-namespace path clean, then it can shrink to configmaps/secrets reads.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -14,7 +18,7 @@ rules:
     resources: ["jobs"]
     verbs: ["create", "get", "list", "watch", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "pods/log"]
+    resources: ["pods"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["configmaps", "secrets"]
@@ -25,6 +29,91 @@ kind: RoleBinding
 metadata:
   name: dcre-agt-rolebinding
   namespace: dcre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dcre-agt-role
+subjects:
+  - kind: ServiceAccount
+    name: dcre-agt
+    namespace: dcre
+---
+# SCRUM-70 flow namespaces: one Role + RoleBinding per flow namespace, binding
+# the AGT ServiceAccount of the control namespace `dcre`. Jobs full lifecycle,
+# pods observe-only (OutcomeWatcher reads container exit codes; nothing reads
+# pod logs, so no pods/log subresource).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dcre-agt-role
+  namespace: dcre-col
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dcre-agt-rolebinding
+  namespace: dcre-col
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dcre-agt-role
+subjects:
+  - kind: ServiceAccount
+    name: dcre-agt
+    namespace: dcre
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dcre-agt-role
+  namespace: dcre-pay
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dcre-agt-rolebinding
+  namespace: dcre-pay
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dcre-agt-role
+subjects:
+  - kind: ServiceAccount
+    name: dcre-agt
+    namespace: dcre
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dcre-agt-role
+  namespace: dcre-man
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dcre-agt-rolebinding
+  namespace: dcre-man
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
