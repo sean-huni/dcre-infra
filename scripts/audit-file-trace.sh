@@ -17,7 +17,7 @@
 #   exchange_root arg  or  DCRE_EXCHANGE_ROOT   the exchange root to scan   (default: <repo>/exchange)
 #   DCRE_COCKROACH     connection command prefix                            (default: in-cluster kubectl exec)
 #   CRDB_USER          role to run as (must be rpt_internal or root)        (default: rpt_internal)
-#   CRDB_DATABASE      database passed explicitly per the ops rule          (default: dcre_collections)
+#   CRDB_DATABASE      database passed explicitly per the ops rule          (default: dcre_col)
 #   DCRE_TRACE_QUERY   killer-query file to run                             (default: scripts/file-trace-query.sql)
 # Overrides for the local inner loop:
 #   DCRE_COCKROACH="cockroach sql --insecure --host=localhost:26257"          # compose stack
@@ -44,7 +44,7 @@ SCRIPT_DIR=${0:A:h}
 REPO_ROOT=${SCRIPT_DIR:h}
 QUERY_FILE=${DCRE_TRACE_QUERY:-$SCRIPT_DIR/file-trace-query.sql}
 EXCHANGE_ROOT=${1:-${DCRE_EXCHANGE_ROOT:-$REPO_ROOT/exchange}}
-CRDB_DATABASE=${CRDB_DATABASE:-dcre_collections}
+CRDB_DATABASE=${CRDB_DATABASE:-dcre_col}
 CRDB_USER=${CRDB_USER:-rpt_internal}
 : ${DCRE_COCKROACH:="kubectl -n dcre exec crdb-0 -- ./cockroach sql --insecure"}
 # zsh ARRAY via forced word-split (${=...}); a scalar would be exec'd as one command name and fail.

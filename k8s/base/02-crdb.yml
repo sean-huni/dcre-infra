@@ -5,7 +5,7 @@ metadata:
   namespace: dcre
 data:
   init.sql: |
-    CREATE DATABASE IF NOT EXISTS dcre_collections;
+    CREATE DATABASE IF NOT EXISTS dcre_col;
     CREATE DATABASE IF NOT EXISTS agt_ops;
 ---
 apiVersion: v1

@@ -89,9 +89,9 @@ for pair in "FNBCC01:fnbcc01" "FNBCC02:fnbcc02" "FNBRF01:fnbrf01" "FNB Internal:
   ORGS[$name]=$oid
   ensure_user "$login" "$oid"
   case "$name" in
-    "FNB Internal") ensure_ds "$oid" "dcre-rpt" "dcre_collections" "rpt_internal"
+    "FNB Internal") ensure_ds "$oid" "dcre-rpt" "dcre_col" "rpt_internal"
                     ensure_ds "$oid" "dcre-ops" "agt_ops" "rpt_internal" ;;
-    *)              ensure_ds "$oid" "dcre-rpt" "dcre_collections" "${name:l}" ;;
+    *)              ensure_ds "$oid" "dcre-rpt" "dcre_col" "${name:l}" ;;
   esac
   echo "org $name id=$oid provisioned"
 done

@@ -127,8 +127,8 @@ CREATE TABLE IF NOT EXISTS rpt_databasechangeloglock (
   lockedby VARCHAR(255), CONSTRAINT pk_rpt_databasechangeloglock PRIMARY KEY (id));
 
 -- agt_ops section. rpt is the only module with Liquibase history in BOTH databases
--- (client-stats reads dcre_collections above; report state lives in agt_ops).
--- This file is executed with --database=dcre_collections (env-reset.sh step 6),
+-- (client-stats reads dcre_col above; report state lives in agt_ops).
+-- This file is executed with --database=dcre_col (env-reset.sh step 6),
 -- so the agt_ops pair must be database-qualified.
 CREATE TABLE IF NOT EXISTS agt_ops.rpt_databasechangelog (
   id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,

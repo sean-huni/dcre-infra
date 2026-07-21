@@ -8,7 +8,7 @@
 -- RUN AS rpt_internal (or root). The four rpt.* views are gated
 -- `WHERE current_user IN ('rpt_internal','root')`, so any client datasource role sees zero rows.
 --
---   cockroach sql --database=dcre_collections --user=rpt_internal ...   (see the runbook in README.md)
+--   cockroach sql --database=dcre_col --user=rpt_internal ...   (see the runbook in README.md)
 --
 -- The connected database is passed explicitly (ops-scripting rule) but is otherwise irrelevant:
 -- every table is reached through its fully-qualified `<db>.rpt.<view>` name.
@@ -29,7 +29,7 @@
 -- script strips a leading strict-UUID prefix automatically.
 -- ============================================================================
 WITH matched AS (
-  SELECT * FROM dcre_collections.rpt.v_file_index   WHERE file_name = :fname
+  SELECT * FROM dcre_col.rpt.v_file_index   WHERE file_name = :fname
   UNION ALL
   SELECT * FROM agt_ops.rpt.v_ops_file_index        WHERE file_name = :fname
 ),
@@ -53,7 +53,7 @@ SELECT * FROM (
   LEFT JOIN (
     SELECT arrival_id, job_name, step, step_at, detail FROM agt_ops.rpt.v_ops_flow
     UNION ALL
-    SELECT arrival_id, job_name, step, step_at, detail FROM dcre_collections.rpt.v_flow_trace
+    SELECT arrival_id, job_name, step, step_at, detail FROM dcre_col.rpt.v_flow_trace
   ) t ON t.arrival_id IN (SELECT aid FROM arr)
       OR t.job_name  IN (SELECT job_name FROM jobs)    -- clock-scoped flows (PSR, seams) join on job identity
 ) z

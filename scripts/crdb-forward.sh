@@ -29,7 +29,7 @@ for p in $SQL_PORT $CONSOLE_PORT; do
 done
 if [ "$ok" = "1" ]; then
   echo "CRDB port-forward up (log: $PF_LOG)"
-  echo "  SQL:     jdbc:postgresql://localhost:$SQL_PORT/dcre_collections?sslmode=disable (user root, no password)"
+  echo "  SQL:     jdbc:postgresql://localhost:$SQL_PORT/dcre_col?sslmode=disable (user root, no password)"
   echo "  Console: http://localhost:$CONSOLE_PORT"
 else
   echo "WARNING: CRDB port-forward failed to start; check $PF_LOG" >&2
