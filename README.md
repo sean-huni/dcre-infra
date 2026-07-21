@@ -95,6 +95,8 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `fint-sim.sh` + `fint_sim_reply.py` | Fintegrate simulator: per client, polls `fint-req/out` for `*_PAIN008.xml`, replies with `{client}_{msgId}_ISR/SBSR/PBSR.xml` into `fint-resp/in` (atomic tmp+rename; every 4th tx RJCT with Rsn AC04), archives the request |
 | `crdb-init.sql` | Guarded creation of `dcre_collections` and `agt_ops` |
 | `seed-liquibase-history.sql` | Pre-creates every module's Liquibase history+lock tables (first-run bootstrap-race guard, idempotent) |
+| `file-trace-query.sql` | The saved cross-DB file-name killer query (SCRUM-58): resolve ANY boundary filename to client/direction/kind/route + ordered step timeline. Run as `rpt_internal`; substitute `:fname`. See the trace runbook below |
+| `audit-file-trace.sh` | Trace-resolution audit gate (SCRUM-58): every exchange file must resolve to >= 1 row from the killer query; exits non-zero listing any untraceable file. Called by the chaos harness as a post-run gate step |
 
 ## Local cluster deployment
 
@@ -143,6 +145,41 @@ node grafana-screenshots.mjs
 ```
 
 The captured M8 evidence (accuracy matrix, security probes, per-client screenshots, chaos + review notes) lives in the design-register repo under `docs/evidence/2026-07-15-client-stats/`.
+
+## File-name trace (SCRUM-58 prod-support runbook)
+
+A prod supporter who holds ANY boundary file name resolves it, in one saved query, to the client, direction, kind (format), route and the ordered step timeline. Owner modules persist every inbound and outbound file name write-ahead in their own tables; the `dcre-rpt` service owns two normalizing view pairs (`dcre_collections.rpt.v_file_index` / `rpt.v_flow_trace` and `agt_ops.rpt.v_ops_file_index` / `rpt.v_ops_flow`); the killer query in `scripts/file-trace-query.sql` unions them across both databases.
+
+**Why a saved statement and not a view:** a persisted cross-DB view needs the deprecated cluster-wide `sql.cross_db_views.enabled`, which stays OFF on the shared cluster. Ad-hoc 3-part-name (`<db>.rpt.<view>`) cross-DB SELECTs work by default, so the query runs from any database in the cluster.
+
+**Run it (as `rpt_internal` or `root` only** -- the four views are gated `WHERE current_user IN ('rpt_internal','root')`, so client datasource roles see zero rows; cross-client file names are tenant leakage):
+
+```bash
+# Replace :fname with the bare basename as a single-quoted literal (cockroach sql has no :var binding).
+FNAME='FNBCC01_DCRECC2026071410000001_onhost-req_RESP.txt'
+
+# kind cluster:
+sed "s/:fname/'${FNAME}'/g" scripts/file-trace-query.sql \
+  | kubectl -n dcre exec -i crdb-0 -- ./cockroach sql --insecure --user=rpt_internal --database=dcre_collections
+
+# compose inner loop (CRDB on :26257):
+sed "s/:fname/'${FNAME}'/g" scripts/file-trace-query.sql \
+  | cockroach sql --insecure --host=localhost:26257 --user=rpt_internal --database=dcre_collections
+```
+
+The `--database` is passed explicitly (ops-scripting discipline); the query itself resolves everything through fully-qualified 3-part names, so the connected database is otherwise irrelevant. The result is one ordered set: client, direction, kind, route, state, then the step timeline (`ARRIVED`/`QUARANTINED`/`DUPLICATE_REDELIVERY` and `<STAGE>_INTENDED`/`<STAGE>_<OUTCOME>` from the ops side interleaved with `CRR_INGESTED` -> `CTV_VALIDATED` -> `CIR_RESP_STAGED`/`WRITTEN` -> `CRW_PLANNED`/`CRW_VISIBLE` -> `IXR`/`SXR`/`PXR_REPLY` -> `PRG_REPORTED` -> `RPT_OUTCOME` from the business side).
+
+**`error/` and `duplicates/` names:** those on-disk names carry a leading `<uuid>_` claim prefix, and after the quarantine row-id fix the uuid IS the arrival/claim id. The owner tables store the BARE name, so strip the `<uuid>_` prefix before pasting `:fname` (or paste the uuid straight into the `arr` CTE). `audit-file-trace.sh` strips it automatically.
+
+**The audit gate (`audit-file-trace.sh`):** after an e2e / chaos run it enumerates every file under the exchange root, runs the killer query for each, and exits non-zero listing any file that returns zero rows (an untraceable boundary file = a capture-layer hole). It excludes `inflight/`, `*.tmp` and hidden markers (`.gitkeep`, `.reset-stamp`, `.staging-drop`) -- the non-deliverable / partial-write artifacts. The chaos harness invokes it as a post-run gate step:
+
+```bash
+scripts/audit-file-trace.sh || { echo "trace-resolution gate failed"; exit 1; }
+```
+
+Config is 12-factor (committed defaults target the kind cluster, matching `rpt-security-probes.sh`): `DCRE_EXCHANGE_ROOT` (or first arg), `DCRE_COCKROACH` (connection command prefix), `CRDB_USER` (default `rpt_internal`), `CRDB_DATABASE` (default `dcre_collections`). Exit codes: `0` all files resolve, `1` one or more unresolved, `2` config error, `3` query/connection failure (fails closed -- a dead DB never false-passes). Override the connection for the inner loop, e.g. `DCRE_COCKROACH="cockroach sql --insecure --host=localhost:26257"`.
+
+**Honest limitations (no backfill, by design):** pre-feature CIR RESP names and pre-feature duplicate re-deliveries stay as dark as they are today; legacy files of every other class trace immediately from existing owner columns. Dev-only `local-<svc>-<executionId>` seam names of the non-rpt modules are self-describing into batch metadata but are NOT killer-query-resolvable (only rpt's seam names are, via `rpt_run`).
 
 ## Related repositories
 
