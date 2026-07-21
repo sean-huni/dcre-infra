@@ -1,3 +1,7 @@
+# SCRUM-70: every namespace that runs stage Jobs needs its OWN PVC named
+# dcre-exchange (PVCs are namespace-scoped; JobLauncher mounts by that name),
+# each bound to its OWN PV over the SAME hostPath. A PV binds exactly one
+# claim, so each pair gets a distinct storageClassName as the binding key.
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -22,6 +26,90 @@ metadata:
 spec:
   accessModes: ["ReadWriteMany"]
   storageClassName: dcre-exchange
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: dcre-exchange-col
+  labels:
+    app.kubernetes.io/part-of: dcre
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: ["ReadWriteMany"]
+  storageClassName: dcre-exchange-col
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /dcre-exchange
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dcre-exchange
+  namespace: dcre-col
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: dcre-exchange-col
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: dcre-exchange-pay
+  labels:
+    app.kubernetes.io/part-of: dcre
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: ["ReadWriteMany"]
+  storageClassName: dcre-exchange-pay
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /dcre-exchange
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dcre-exchange
+  namespace: dcre-pay
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: dcre-exchange-pay
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: dcre-exchange-man
+  labels:
+    app.kubernetes.io/part-of: dcre
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: ["ReadWriteMany"]
+  storageClassName: dcre-exchange-man
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /dcre-exchange
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dcre-exchange
+  namespace: dcre-man
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: dcre-exchange-man
   resources:
     requests:
       storage: 1Gi
