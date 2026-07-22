@@ -25,8 +25,12 @@ Client-first layout under the single exchange root: `exchange/<clientbase>/<chan
 - `onhost-resp` (out/error/archive): CIR/PRG output.
 - `fint-req` (out/error/archive): CRW pain.008; fint-sim consumes `out`.
 - `fint-resp` (in/error/archive): pain.002-family; fint-sim drops `in`; AGT watches.
+- `onhost-req-man` (in/error/archive): inbound mandate instruction books (M10 mandates route).
+- `onhost-resp-man` (out/error/archive): mandate outcome output (M10 mandates route).
+- `fint-req-man` (out/error/archive): outbound mandate requests to Fintegrate (M10 mandates route).
+- `fint-resp-man` (in/error/archive): inbound mandate responses from Fintegrate (M10 mandates route).
 
-Under the inbound channels (`onhost-req`, `onhost-req-endo`, `fint-resp`), `archive` also hosts AGT's nested `inflight/` and `duplicates/` sinks.
+Under the inbound channels (`onhost-req`, `onhost-req-endo`, `fint-resp`, `onhost-req-man`, `fint-resp-man`), `archive` also hosts AGT's nested `inflight/` and `duplicates/` sinks.
 
 Two seams stay **global** (outside the per-client tree, directly under the exchange root): `outcomes` (M1/M2 synthetic AGT-service outcome seam, SYNTHETIC-CONTRACT) and `chaos` (test fault injection).
 
@@ -63,7 +67,9 @@ Host ports:
 | Grafana | 3000 | 3001 (`scripts/lgtm-forward.sh`) |
 | OTLP gRPC / HTTP | 4317 / 4318 | in-cluster `svc/lgtm` |
 
-Databases `dcre_col` and `agt_ops` are created by `scripts/crdb-init.sql` (guarded, never DROP) in both environments.
+Databases `dcre_col`, `agt_ops` and `dcre_man` are created by `scripts/crdb-init.sql` (guarded, never DROP) in both environments.
+
+**Migration note (pre-existing environments):** the initdb path (compose mount, k8s `crdb-init` ConfigMap) runs on FIRST bootstrap only; an environment that already has a CRDB volume or a live cluster does not re-run it. Such environments pick up `dcre_man` via `env-reset.sh` step 4, or manually: `CREATE DATABASE IF NOT EXISTS dcre_man;`.
 
 ## Configuration
 
@@ -90,10 +96,10 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `rpt-accuracy-check.sh` | 54-check accuracy matrix: independent raw-SQL derivation from base tables (as `root`) vs the rpt views the dashboards display (as each client / `rpt_internal`); fail-closed (empty/non-numeric FAILS), exits non-zero on any mismatch (spec gate) |
 | `rpt-security-probes.sh` | Negative security probes: grants wall (client role denied on `public.*` and ops views, asserting SQLSTATE 42501) plus per-view cross-client scoping and a non-emptiness canary; exits non-zero on any unexpected access |
 | `grafana-screenshots.mjs` | Playwright (headless chromium) evidence capture: logs in as each org user and screenshots every dashboard, proving per-client isolation and full panel rendering (tall viewport so lazy panels paint). Manifest: `scripts/package.json` |
-| `env-reset.sh [--seed accounts.sql mandates.sql]` | 13-step clean slate: stop AGT, delete Jobs/pods, stop fint-sim, drop+recreate both DBs, drain CRDB schema-change jobs, pre-seed and verify all 26 Liquibase history+lock tables (24 in `dcre_col`, 2 `rpt_*` in `agt_ops`), clean the exchange, restart AGT, optional reference reseed, warm-up drops per route, post-checks, restart fint-sim |
+| `env-reset.sh [--seed accounts.sql mandates.sql]` | 13-step clean slate: stop AGT, delete Jobs/pods, stop fint-sim, drop+recreate all three DBs, drain CRDB schema-change jobs, pre-seed and verify all 44 Liquibase history+lock tables (24 in `dcre_col`, 18 in `dcre_man`, 2 `rpt_*` in `agt_ops`), clean the exchange, restart AGT, optional reference reseed, warm-up drops per route, post-checks, restart fint-sim |
 | `switch-version.sh <1.0\|1.1\|2.0\|2.0.1\|2.1.0>` | Fleet-wide release switch: sets the AGT image and every `AGT_<STAGE>_IMAGE` env (CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS); refuses 2.x to 1.x, 2.0.1 to 2.0, and any downgrade off 2.1.x |
 | `fint-sim.sh` + `fint_sim_reply.py` | Fintegrate simulator: per client, polls `fint-req/out` for `*_PAIN008.xml`, replies with `{client}_{msgId}_ISR/SBSR/PBSR.xml` into `fint-resp/in` (atomic tmp+rename; every 4th tx RJCT with Rsn AC04), archives the request |
-| `crdb-init.sql` | Guarded creation of `dcre_col` and `agt_ops` |
+| `crdb-init.sql` | Guarded creation of `dcre_col`, `agt_ops` and `dcre_man` |
 | `seed-liquibase-history.sql` | Pre-creates every module's Liquibase history+lock tables (first-run bootstrap-race guard, idempotent) |
 | `file-trace-query.sql` | The saved cross-DB file-name killer query (SCRUM-58): resolve ANY boundary filename to client/direction/kind/route + ordered step timeline. Run as `rpt_internal`; substitute `:fname`. See the trace runbook below |
 | `audit-file-trace.sh` | Trace-resolution audit gate (SCRUM-58): every exchange file must resolve to >= 1 row from the killer query; exits non-zero listing any untraceable file. Called by the chaos harness as a post-run gate step |
