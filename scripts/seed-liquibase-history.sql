@@ -5,6 +5,8 @@
 -- "relation already exists" (caught in the M7 straight-cycle e2e, 2026-07-13).
 -- DDL matches what Liquibase 5.x itself creates; Liquibase adopts pre-existing
 -- tables untouched. Idempotent: IF NOT EXISTS throughout.
+-- Totals: 44 tables = 24 in dcre_col (12 services x 2) + 2 in agt_ops (rpt)
+-- + 18 in dcre_man (9 M-services x 2).
 
 CREATE TABLE IF NOT EXISTS crr_databasechangelog (
   id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
@@ -139,3 +141,96 @@ CREATE TABLE IF NOT EXISTS agt_ops.rpt_databasechangelog (
 CREATE TABLE IF NOT EXISTS agt_ops.rpt_databasechangeloglock (
   id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
   lockedby VARCHAR(255), CONSTRAINT pk_rpt_databasechangeloglock PRIMARY KEY (id));
+
+-- dcre_man section: the M10 Mandates services (SCRUM-73). Executed with
+-- --database=dcre_col (env-reset.sh step 6), so every pair must be
+-- database-qualified, same as the agt_ops.rpt pair above.
+CREATE TABLE IF NOT EXISTS dcre_man.mrr_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mrr_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mrr_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.mrv_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mrv_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mrv_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.maf_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.maf_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_maf_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.mis_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mis_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mis_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.mir_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mir_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mir_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.mrw_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mrw_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mrw_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.mar_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mar_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mar_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.msr_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.msr_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_msr_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.mrg_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mrg_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mrg_databasechangeloglock PRIMARY KEY (id));

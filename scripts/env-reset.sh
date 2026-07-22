@@ -52,12 +52,14 @@ echo "[3/13] stop fint-sim (a stale pre-restructure sim survives resets and keep
 echo "       writing the old flat paths; a fresh one restarts in step 13)"
 pkill -f fint-sim 2>/dev/null || true
 
-echo "[4/13] drop + recreate both databases"
+echo "[4/13] drop + recreate all three databases"
 kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -e "
   DROP DATABASE IF EXISTS dcre_col CASCADE;
   DROP DATABASE IF EXISTS agt_ops CASCADE;
+  DROP DATABASE IF EXISTS dcre_man CASCADE;
   CREATE DATABASE dcre_col;
-  CREATE DATABASE agt_ops;"
+  CREATE DATABASE agt_ops;
+  CREATE DATABASE dcre_man;"
 
 echo "[5/13] drain async schema-change jobs (DROP ... CASCADE returns while its jobs"
 echo "       still run: 'NOTICE: waiting for job(s) to complete'; seeding or scaling"
@@ -80,7 +82,8 @@ echo "       (first-run bootstrap-race guard; idempotent IF NOT EXISTS)"
 kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_col \
   < $INFRA/scripts/seed-liquibase-history.sql > /dev/null
 
-echo "[7/13] verify all 24 history+lock tables exist BEFORE any service comes back"
+echo "[7/13] verify all 44 history+lock tables exist BEFORE any service comes back"
+echo "       (24 dcre_col + 18 dcre_man + 2 agt_ops; per-database guards below)"
 typeset -i vguard=0
 while :; do
   lbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_col] WHERE table_name LIKE '%databasechangelog%';") || lbt=""
@@ -88,6 +91,18 @@ while :; do
   vguard+=1
   if (( vguard > 6 )); then
     echo "ERROR: expected 24 Liquibase history+lock tables in dcre_col, found ${lbt:-0}." >&2
+    echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
+    exit 1
+  fi
+  sleep 5
+done
+typeset -i mguard=0
+while :; do
+  mbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_man] WHERE table_name LIKE '%databasechangelog%';") || mbt=""
+  [[ "$mbt" == "18" ]] && break
+  mguard+=1
+  if (( mguard > 6 )); then
+    echo "ERROR: expected 18 Liquibase history+lock tables in dcre_man, found ${mbt:-0}." >&2
     echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
     exit 1
   fi
