@@ -14,8 +14,8 @@ set -euo pipefail
 
 VERSION=${1:-}
 case "$VERSION" in
-  1.0|1.1|2.0|2.0.1|2.1.0|2.2.0) ;;
-  *) echo "usage: $0 <1.0|1.1|2.0|2.0.1|2.1.0|2.2.0>" >&2; exit 64 ;;
+  1.0|1.1|2.0|2.0.1|2.1.0|2.2.0|2.3.0) ;;
+  *) echo "usage: $0 <1.0|1.1|2.0|2.0.1|2.1.0|2.2.0|2.3.0>" >&2; exit 64 ;;
 esac
 
 NS=dcre
@@ -31,6 +31,16 @@ if [[ "$CURRENT" == "2.0.1" && "$VERSION" == "2.0" ]]; then
   exit 65
 fi
 STAGES=(CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS)
+
+# M10 mandates family (SCRUM-79): dcre-m* images exist only from the 2.3
+# release line. For older targets the AGT_M*_IMAGE envs are NOT set: pointing
+# AGT_MRR_IMAGE at dcre-mrr:<old> would name a nonexistent image and wedge the
+# launch, while absent/empty stays launch-disabled by config default.
+MAJOR=${VERSION%%.*}
+MINOR=${${VERSION#*.}%%.*}
+if (( MAJOR > 2 || (MAJOR == 2 && MINOR >= 3) )); then
+  STAGES+=(MRR MRV MAF MIS MIR MRW MAR MSR MRG)
+fi
 
 
 # 2.1.0 guard: per-client exchange tree + per-attempt outcome schema (005) make any
@@ -48,6 +58,16 @@ fi
 if [[ "$CURRENT" == 2.2* && "$VERSION" != 2.2* ]]; then
   echo "REFUSED: downgrade from $CURRENT to $VERSION (flow namespaces: pre-2.2 AGT" >&2
   echo "cannot see col-/pay-/man- Jobs and would duplicate-launch running work)" >&2
+  exit 65
+fi
+
+# 2.3 guard (SCRUM-79, one-directional): 2.3 AGT mints MRR..MRG intents and
+# outcomes; a pre-2.3 AGT cannot parse those stage tokens and would poison
+# in-flight man arrivals (Stage.valueOf failure class, same downgrade logic
+# as the 2.0/2.1/2.2 boundaries above).
+if [[ "$CURRENT" == 2.3* && "$VERSION" != 2.3* ]]; then
+  echo "REFUSED: downgrade from $CURRENT to $VERSION (mandates stages: pre-2.3 AGT" >&2
+  echo "cannot parse MRR..MRG intents/outcomes for in-flight man arrivals)" >&2
   exit 65
 fi
 
