@@ -30,45 +30,34 @@ if [[ "$CURRENT" == "2.0.1" && "$VERSION" == "2.0" ]]; then
   echo "REFUSED: 2.0 re-opens the A-45 response-file collision fixed in 2.0.1." >&2
   exit 65
 fi
+
+# Ordered line-boundary guard (SCRUM-79 review, replaces the direction-blind
+# per-line guards that also refused upgrades): every minor line since 2.1 is
+# one-directional (2.1 per-client tree + per-attempt outcome schema; 2.2 flow
+# namespaces; 2.3 mandates stages MRR..MRG). Refuse ONLY a true downgrade,
+# i.e. target major.minor line BELOW the current line; upgrades and same-line
+# patch moves pass. Numeric compare, so 2.10 orders above 2.9. The legacy
+# 1.x-poison and 2.0.1->2.0 (A-45) guards above stay as-is.
+CUR_MAJOR=${CURRENT%%.*}
+CUR_MINOR=${${CURRENT#*.}%%.*}
+TGT_MAJOR=${VERSION%%.*}
+TGT_MINOR=${${VERSION#*.}%%.*}
+if (( TGT_MAJOR < CUR_MAJOR || (TGT_MAJOR == CUR_MAJOR && TGT_MINOR < CUR_MINOR) )); then
+  echo "REFUSED: $CURRENT -> $VERSION crosses a release-line boundary downward." >&2
+  echo "Each line since 2.1 is one-directional (2.1 per-client tree + attempt schema;" >&2
+  echo "2.2 flow namespaces; 2.3 mandates stages MRR..MRG): an older AGT cannot read" >&2
+  echo "the newer ledgers/Jobs and would poison outcomes or duplicate-launch live work." >&2
+  exit 65
+fi
+
 STAGES=(CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS)
 
 # M10 mandates family (SCRUM-79): dcre-m* images exist only from the 2.3
 # release line. For older targets the AGT_M*_IMAGE envs are NOT set: pointing
 # AGT_MRR_IMAGE at dcre-mrr:<old> would name a nonexistent image and wedge the
 # launch, while absent/empty stays launch-disabled by config default.
-MAJOR=${VERSION%%.*}
-MINOR=${${VERSION#*.}%%.*}
-if (( MAJOR > 2 || (MAJOR == 2 && MINOR >= 3) )); then
+if (( TGT_MAJOR > 2 || (TGT_MAJOR == 2 && TGT_MINOR >= 3) )); then
   STAGES+=(MRR MRV MAF MIS MIR MRW MAR MSR MRG)
-fi
-
-
-# 2.1.0 guard: per-client exchange tree + per-attempt outcome schema (005) make any
-# downgrade from 2.1.0 unsafe (older stages read the flat tree; older AGT cannot
-# read per-attempt outcomes).
-if [[ "$CURRENT" == 2.1* && "$VERSION" != 2.1* ]]; then
-  echo "REFUSED: downgrade from $CURRENT to $VERSION (per-client tree + attempt schema)" >&2
-  exit 65
-fi
-
-# 2.2 guard (SCRUM-70, one-directional): 2.2 launches stage Jobs into the flow
-# namespaces (dcre-col/dcre-pay/dcre-man). A pre-2.2 AGT only watches namespace
-# dcre: it cannot see still-running col-/pay- Jobs, so after REAP_GRACE it would
-# relaunch duplicates of live work = concurrent same-identity execution.
-if [[ "$CURRENT" == 2.2* && "$VERSION" != 2.2* ]]; then
-  echo "REFUSED: downgrade from $CURRENT to $VERSION (flow namespaces: pre-2.2 AGT" >&2
-  echo "cannot see col-/pay-/man- Jobs and would duplicate-launch running work)" >&2
-  exit 65
-fi
-
-# 2.3 guard (SCRUM-79, one-directional): 2.3 AGT mints MRR..MRG intents and
-# outcomes; a pre-2.3 AGT cannot parse those stage tokens and would poison
-# in-flight man arrivals (Stage.valueOf failure class, same downgrade logic
-# as the 2.0/2.1/2.2 boundaries above).
-if [[ "$CURRENT" == 2.3* && "$VERSION" != 2.3* ]]; then
-  echo "REFUSED: downgrade from $CURRENT to $VERSION (mandates stages: pre-2.3 AGT" >&2
-  echo "cannot parse MRR..MRG intents/outcomes for in-flight man arrivals)" >&2
-  exit 65
 fi
 
 # SCRUM-70 cutover: the AGT deployment must roll Recreate-style (strategy:
