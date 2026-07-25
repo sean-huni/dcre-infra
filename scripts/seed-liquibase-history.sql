@@ -205,6 +205,42 @@ CREATE TABLE IF NOT EXISTS dcre_man.mrw_databasechangeloglock (
   id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
   lockedby VARCHAR(255), CONSTRAINT pk_mrw_databasechangeloglock PRIMARY KEY (id));
 
+-- SCRUM-91: the three mandate response-leg readers. They are three PARALLEL
+-- token-picked entries on one route, which is exactly the concurrency shape that
+-- triggered the 2026-07-13 history-table bootstrap race (two routes launching the
+-- same service simultaneously both attempt CREATE TABLE <svc>_databasechangelog
+-- before the lock table exists; the loser dies with 'relation already exists').
+-- Pre-creating all three here is what makes their first concurrent run safe.
+CREATE TABLE IF NOT EXISTS dcre_man.mix_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mix_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mix_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.msx_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.msx_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_msx_databasechangeloglock PRIMARY KEY (id));
+
+CREATE TABLE IF NOT EXISTS dcre_man.mpx_databasechangelog (
+  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
+  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
+  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
+  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
+  labels VARCHAR(255), deployment_id VARCHAR(10));
+CREATE TABLE IF NOT EXISTS dcre_man.mpx_databasechangeloglock (
+  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
+  lockedby VARCHAR(255), CONSTRAINT pk_mpx_databasechangeloglock PRIMARY KEY (id));
+
 CREATE TABLE IF NOT EXISTS dcre_man.mar_databasechangelog (
   id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
   dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
