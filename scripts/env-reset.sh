@@ -87,17 +87,19 @@ kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_man \
   < $INFRA/scripts/seed-man-core.sql > /dev/null
 typeset -i cguard=0
 while :; do
-  mct=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_man] WHERE table_name IN ('account_type','account','mandate','mandate_reason_code');") || mct=""
-  [[ "$mct" == "4" ]] && break
+  # SCRUM-91: the mandate projection is no longer a shared-core table (MSR deleted,
+  # state derived by the MRG views), so the core is three tables, not four.
+  mct=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_man] WHERE table_name IN ('account_type','account','mandate_reason_code');") || mct=""
+  [[ "$mct" == "3" ]] && break
   cguard+=1
   if (( cguard > 6 )); then
-    echo "ERROR: expected 4 dcre_man shared-core tables (account_type, account, mandate, mandate_reason_code), found ${mct:-0}." >&2
+    echo "ERROR: expected 3 dcre_man shared-core tables (account_type, account, mandate_reason_code), found ${mct:-0}." >&2
     echo "       NOT scaling AGT up: an M-service bootstrapping now would race the shared-core mint." >&2
     exit 1
   fi
   sleep 5
 done
-echo "       dcre_man shared-core: 4 core tables present"
+echo "       dcre_man shared-core: 3 core tables present"
 
 echo "[7/13] verify all 44 history+lock tables exist BEFORE any service comes back"
 echo "       (24 dcre_col + 18 dcre_man + 2 agt_ops; per-database guards below)"

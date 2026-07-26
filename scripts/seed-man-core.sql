@@ -12,8 +12,10 @@
 --
 -- FK relationships are deliberately SHAPE-ONLY (columns + indexes, no DB
 -- constraints) so guarded pre-creates converge from any service order.
--- Canonical owners arrive with their services (R-04): mandate projection = MSR
--- (T13), account master consolidation = M11.
+-- Canonical owners arrive with their services (R-04): account master
+-- consolidation = M11. The mandate PROJECTION is no longer part of this core:
+-- SCRUM-91 deleted MSR, its only writer, and replaced it with the MRG-derived
+-- mnd_ext_status / mandate_effective_status / mandate_current_status views.
 -- Idempotent throughout: IF NOT EXISTS creates; seeds are per-row
 -- INSERT ... ON CONFLICT (code) DO NOTHING (business identity = PK).
 
@@ -45,27 +47,16 @@ CREATE TABLE IF NOT EXISTS account (
   CONSTRAINT uq_account_number UNIQUE (account_number));
 CREATE INDEX IF NOT EXISTS ix_account_type_code ON account (account_type_code);
 
--- Mandate PROJECTION shape (spec section 2); MSR is the sole writer (R-10,
--- ruling note 2). R-20/F28-F29: at-most-one EFFECTIVELY ACTIVE mandate per ref
--- is an effective-WINDOW rule enforced app-side, so mandate_ref carries an
--- index, not a DB UNIQUE constraint.
-CREATE TABLE IF NOT EXISTS mandate (
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  mandate_ref VARCHAR(35) NOT NULL,
-  contract_ref VARCHAR(14) NOT NULL,
-  creditor_account VARCHAR(32) NOT NULL,
-  debtor_account VARCHAR(32),
-  debtor_branch VARCHAR(16),
-  debtor_name VARCHAR(70),
-  max_collection_amount DECIMAL(18,2),
-  frequency VARCHAR(4),
-  collection_day SMALLINT,
-  state VARCHAR(16) NOT NULL,
-  start_date DATE,
-  expiry_date DATE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
-CREATE INDEX IF NOT EXISTS ix_mandate_ref ON mandate (mandate_ref);
+-- SCRUM-91: the mandate PROJECTION table is GONE and this file must not mint it
+-- again. Its state is derived by the MRG views listed above and every other
+-- attribute it carried lives on the MRR request spine. The services' 000
+-- bootstraps still contain the immutable create changeset (applied on the
+-- standing cluster, so it can never be rewritten); nine of them now end with a
+-- guarded drop, and MRG drops it in its own 009-drop-mandate-projection.xml.
+-- The DROP below keeps this canon file convergent: re-applying the bootstrap
+-- over a database that still holds the table removes it rather than preserving
+-- it. Safe on a fresh dcre_man, where it is a no-op.
+DROP TABLE IF EXISTS mandate;
 
 CREATE TABLE IF NOT EXISTS mandate_reason_code (
   code VARCHAR(4) NOT NULL PRIMARY KEY,
