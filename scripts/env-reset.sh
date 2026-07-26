@@ -101,8 +101,12 @@ while :; do
 done
 echo "       dcre_man shared-core: 3 core tables present"
 
-echo "[7/13] verify all 44 history+lock tables exist BEFORE any service comes back"
-echo "       (24 dcre_col + 18 dcre_man + 2 agt_ops; per-database guards below)"
+echo "[7/13] verify all 46 history+lock tables exist BEFORE any service comes back"
+echo "       (24 dcre_col + 20 dcre_man + 2 agt_ops; per-database guards below)"
+# SCRUM-91: dcre_man went 18 -> 20. The roster lost mar and msr (retired, repos
+# archived) and gained the three per-leg readers mix, msx and mpx: 9 services
+# became 10. The count is deliberately exact, not a lower bound, so a stale
+# roster fails the reset here rather than silently racing a service bootstrap.
 typeset -i vguard=0
 while :; do
   lbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_col] WHERE table_name LIKE '%databasechangelog%';") || lbt=""
@@ -118,10 +122,10 @@ done
 typeset -i mguard=0
 while :; do
   mbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_man] WHERE table_name LIKE '%databasechangelog%';") || mbt=""
-  [[ "$mbt" == "18" ]] && break
+  [[ "$mbt" == "20" ]] && break
   mguard+=1
   if (( mguard > 6 )); then
-    echo "ERROR: expected 18 Liquibase history+lock tables in dcre_man, found ${mbt:-0}." >&2
+    echo "ERROR: expected 20 Liquibase history+lock tables in dcre_man, found ${mbt:-0}." >&2
     echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
     exit 1
   fi

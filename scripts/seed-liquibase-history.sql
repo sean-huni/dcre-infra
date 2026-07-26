@@ -241,25 +241,12 @@ CREATE TABLE IF NOT EXISTS dcre_man.mpx_databasechangeloglock (
   id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
   lockedby VARCHAR(255), CONSTRAINT pk_mpx_databasechangeloglock PRIMARY KEY (id));
 
-CREATE TABLE IF NOT EXISTS dcre_man.mar_databasechangelog (
-  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
-  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
-  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
-  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
-  labels VARCHAR(255), deployment_id VARCHAR(10));
-CREATE TABLE IF NOT EXISTS dcre_man.mar_databasechangeloglock (
-  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
-  lockedby VARCHAR(255), CONSTRAINT pk_mar_databasechangeloglock PRIMARY KEY (id));
-
-CREATE TABLE IF NOT EXISTS dcre_man.msr_databasechangelog (
-  id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
-  dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
-  exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
-  comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
-  labels VARCHAR(255), deployment_id VARCHAR(10));
-CREATE TABLE IF NOT EXISTS dcre_man.msr_databasechangeloglock (
-  id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
-  lockedby VARCHAR(255), CONSTRAINT pk_msr_databasechangeloglock PRIMARY KEY (id));
+-- SCRUM-91: mar and msr are RETIRED. MAR split into the three per-leg readers
+-- mix/msx/mpx (seeded above); MSR's projection, expiry sweep and suspension sweep
+-- are derived views in MRG plus the mandate_override sink. Their history tables are
+-- deliberately NOT seeded: a service that no longer exists must not be pre-minted,
+-- and the dcre_man guard in env-reset.sh counts on this roster being exact.
+-- Archived repos: github.com/sean-huni/dcre-mar, github.com/sean-huni/dcre-msr.
 
 CREATE TABLE IF NOT EXISTS dcre_man.mrg_databasechangelog (
   id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
