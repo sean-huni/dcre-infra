@@ -217,8 +217,22 @@ so=$(sqlval "SELECT count(*) FROM stage_outcome;" dcre_col) || so=""
 echo "        stage_outcome baseline: ${so:-n/a} rows. Transient CRW TECH_FAILED clock"
 echo "        windows between AGT-up and the first CDE run (minting cde_schedule) are"
 echo "        EXPECTED; subtract this baseline in later pass-rate accounting."
-kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -d dcre_col --format=csv -e "
-  SELECT (SELECT count(*) FROM account) accounts, (SELECT count(*) FROM mandate) mandates;"
+# Reference-data census. Both tables live in dcre_col: `mandate` here is the LEGACY
+# collections mandate table (kept until M11), NOT the dcre_man projection that
+# SCRUM-91 dropped. Do not "fix" this to point at dcre_man.
+#
+# Degrades to a WARN instead of aborting the reset. Without --seed neither table
+# exists until AIS applies its Liquibase, and step 11 already prints that warning
+# itself, so a bare query here made the script fail on the very condition it had
+# just predicted. A post-CHECK must never be the thing that kills the reset.
+acct=$(sqlval "SELECT count(*) FROM account;" dcre_col) || acct=""
+mndt=$(sqlval "SELECT count(*) FROM mandate;" dcre_col) || mndt=""
+if [[ -z "$acct" || -z "$mndt" ]]; then
+  echo "WARN: reference data absent (accounts=${acct:-n/a} mandates=${mndt:-n/a}); account/mandate" >&2
+  echo "      are minted by AIS's Liquibase or by --seed. CTV gating stays fail-closed until then." >&2
+else
+  echo "        reference data: $acct accounts, $mndt mandates"
+fi
 date +%s > $EX/.reset-stamp
 echo "        reset stamp written: $EX/.reset-stamp ($(cat $EX/.reset-stamp))"
 
