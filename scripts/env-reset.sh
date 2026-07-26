@@ -87,20 +87,26 @@ kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_man \
   < $INFRA/scripts/seed-man-core.sql > /dev/null
 typeset -i cguard=0
 while :; do
-  mct=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_man] WHERE table_name IN ('account_type','account','mandate','mandate_reason_code');") || mct=""
-  [[ "$mct" == "4" ]] && break
+  # SCRUM-91: the mandate projection is no longer a shared-core table (MSR deleted,
+  # state derived by the MRG views), so the core is three tables, not four.
+  mct=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_man] WHERE table_name IN ('account_type','account','mandate_reason_code');") || mct=""
+  [[ "$mct" == "3" ]] && break
   cguard+=1
   if (( cguard > 6 )); then
-    echo "ERROR: expected 4 dcre_man shared-core tables (account_type, account, mandate, mandate_reason_code), found ${mct:-0}." >&2
+    echo "ERROR: expected 3 dcre_man shared-core tables (account_type, account, mandate_reason_code), found ${mct:-0}." >&2
     echo "       NOT scaling AGT up: an M-service bootstrapping now would race the shared-core mint." >&2
     exit 1
   fi
   sleep 5
 done
-echo "       dcre_man shared-core: 4 core tables present"
+echo "       dcre_man shared-core: 3 core tables present"
 
-echo "[7/13] verify all 44 history+lock tables exist BEFORE any service comes back"
-echo "       (24 dcre_col + 18 dcre_man + 2 agt_ops; per-database guards below)"
+echo "[7/13] verify all 46 history+lock tables exist BEFORE any service comes back"
+echo "       (24 dcre_col + 20 dcre_man + 2 agt_ops; per-database guards below)"
+# SCRUM-91: dcre_man went 18 -> 20. The roster lost mar and msr (retired, repos
+# archived) and gained the three per-leg readers mix, msx and mpx: 9 services
+# became 10. The count is deliberately exact, not a lower bound, so a stale
+# roster fails the reset here rather than silently racing a service bootstrap.
 typeset -i vguard=0
 while :; do
   lbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_col] WHERE table_name LIKE '%databasechangelog%';") || lbt=""
@@ -116,10 +122,10 @@ done
 typeset -i mguard=0
 while :; do
   mbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_man] WHERE table_name LIKE '%databasechangelog%';") || mbt=""
-  [[ "$mbt" == "18" ]] && break
+  [[ "$mbt" == "20" ]] && break
   mguard+=1
   if (( mguard > 6 )); then
-    echo "ERROR: expected 18 Liquibase history+lock tables in dcre_man, found ${mbt:-0}." >&2
+    echo "ERROR: expected 20 Liquibase history+lock tables in dcre_man, found ${mbt:-0}." >&2
     echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
     exit 1
   fi
@@ -211,8 +217,22 @@ so=$(sqlval "SELECT count(*) FROM stage_outcome;" dcre_col) || so=""
 echo "        stage_outcome baseline: ${so:-n/a} rows. Transient CRW TECH_FAILED clock"
 echo "        windows between AGT-up and the first CDE run (minting cde_schedule) are"
 echo "        EXPECTED; subtract this baseline in later pass-rate accounting."
-kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -d dcre_col --format=csv -e "
-  SELECT (SELECT count(*) FROM account) accounts, (SELECT count(*) FROM mandate) mandates;"
+# Reference-data census. Both tables live in dcre_col: `mandate` here is the LEGACY
+# collections mandate table (kept until M11), NOT the dcre_man projection that
+# SCRUM-91 dropped. Do not "fix" this to point at dcre_man.
+#
+# Degrades to a WARN instead of aborting the reset. Without --seed neither table
+# exists until AIS applies its Liquibase, and step 11 already prints that warning
+# itself, so a bare query here made the script fail on the very condition it had
+# just predicted. A post-CHECK must never be the thing that kills the reset.
+acct=$(sqlval "SELECT count(*) FROM account;" dcre_col) || acct=""
+mndt=$(sqlval "SELECT count(*) FROM mandate;" dcre_col) || mndt=""
+if [[ -z "$acct" || -z "$mndt" ]]; then
+  echo "WARN: reference data absent (accounts=${acct:-n/a} mandates=${mndt:-n/a}); account/mandate" >&2
+  echo "      are minted by AIS's Liquibase or by --seed. CTV gating stays fail-closed until then." >&2
+else
+  echo "        reference data: $acct accounts, $mndt mandates"
+fi
 date +%s > $EX/.reset-stamp
 echo "        reset stamp written: $EX/.reset-stamp ($(cat $EX/.reset-stamp))"
 
