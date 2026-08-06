@@ -175,15 +175,15 @@ CREATE TABLE IF NOT EXISTS dcre_man.maf_databasechangeloglock (
   id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
   lockedby VARCHAR(255), CONSTRAINT pk_maf_databasechangeloglock PRIMARY KEY (id));
 
-CREATE TABLE IF NOT EXISTS dcre_man.mis_databasechangelog (
+CREATE TABLE IF NOT EXISTS dcre_man.mit_databasechangelog (
   id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,
   dateexecuted TIMESTAMP WITHOUT TIME ZONE NOT NULL, orderexecuted INTEGER NOT NULL,
   exectype VARCHAR(10) NOT NULL, md5sum VARCHAR(35), description VARCHAR(255),
   comments VARCHAR(255), tag VARCHAR(255), liquibase VARCHAR(20), contexts VARCHAR(255),
   labels VARCHAR(255), deployment_id VARCHAR(10));
-CREATE TABLE IF NOT EXISTS dcre_man.mis_databasechangeloglock (
+CREATE TABLE IF NOT EXISTS dcre_man.mit_databasechangeloglock (
   id INTEGER NOT NULL, locked BOOLEAN NOT NULL, lockgranted TIMESTAMP WITHOUT TIME ZONE,
-  lockedby VARCHAR(255), CONSTRAINT pk_mis_databasechangeloglock PRIMARY KEY (id));
+  lockedby VARCHAR(255), CONSTRAINT pk_mit_databasechangeloglock PRIMARY KEY (id));
 
 CREATE TABLE IF NOT EXISTS dcre_man.mir_databasechangelog (
   id VARCHAR(255) NOT NULL, author VARCHAR(255) NOT NULL, filename VARCHAR(255) NOT NULL,

@@ -57,7 +57,7 @@ STAGES=(CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS)
 # AGT_MRR_IMAGE at dcre-mrr:<old> would name a nonexistent image and wedge the
 # launch, while absent/empty stays launch-disabled by config default.
 if (( TGT_MAJOR > 2 || (TGT_MAJOR == 2 && TGT_MINOR >= 3) )); then
-  STAGES+=(MRR MRV MAF MIS MIR MRW MIX MSX MPX MRG)
+  STAGES+=(MRR MRV MAF MIT MIR MRW MIX MSX MPX MRG)
   # SCRUM-91: MAR and MSR are retired (split into MIX/MSX/MPX and replaced by the
   # derived views). They stay out of this list so no AGT_MAR_IMAGE/AGT_MSR_IMAGE is
   # ever exported; the Stage enum keeps them only so historic stage_outcome rows parse.
