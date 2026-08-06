@@ -3,7 +3,7 @@
 -- The dcre_man shared core (account_type, account) has ONE canonical owner:
 -- mrr 000-man-core-bootstrap.xml / infra seed-man-core.sql, applied by
 -- env-reset before any M-service boots. This file only SEEDS reference rows
--- MRV/MAF read (account existence + account_type.mandates_allowed + the
+-- MRV/MAS read (account existence + account_type.mandates_allowed + the
 -- debtor digits the affordability stub scores); it is idempotent and adopts
 -- the Liquibase-owned tables if they already exist.
 -- account_type roster (A-62): SAV disallows mandates (AG01); the rest allow.
