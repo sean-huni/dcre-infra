@@ -51,26 +51,22 @@ cp fixtures/ctv-gate/<book>.txt exchange/.staging-drop/
 mv exchange/.staging-drop/<book>.txt exchange/fnbrf01/onhost-req/in/
 ```
 
-## Known blocker (2026-07-27)
+## Resolved blocker (raised 2026-07-27, fixed since; verified 2026-08-07)
 
-CRR ingests this book cleanly (`BUSINESS_ACCEPTED`, all 8 `mandate_ref` values
-land in `tx_entry`), but CTV then fails in projection mode before writing any
+CRR ingested this book cleanly but CTV then failed in projection mode before writing any
 `validation_log` row:
 
 ```
 java.lang.ArrayIndexOutOfBoundsException: Index 8 out of bounds for length 8
   at org.postgresql.jdbc.TimestampUtils.parseDate(TimestampUtils.java:395)
-  at org.postgresql.jdbc.PgResultSet.getDate(PgResultSet.java:551)
   at za.co.fnb.dcre.ctv.data.repo.MandateProjectionDao.map(MandateProjectionDao.java:85)
 ```
 
-`man_ctv_view.start_date` and `expiry_date` are `VARCHAR(8)` carrying COBOL
-`YYYYMMDD` (e.g. `20260726`), which is the MSR contract: `mandate_current_status`
-itself does `to_date(max(m.expiry_date), 'YYYYMMDD')`. `MandateProjectionDao.map`
-calls `rs.getDate(...)`, and pgjdbc's date parser reads index 8 expecting
-`YYYY-MM-DD`. `MandateProjectionDaoIT` declares its fixture columns as `DATE`, so
-the mismatch is invisible in test. The fault fires only when a `mandate_ref`
-actually matches a projection row, which is exactly the case the gate exists for.
-The gate itself never reads the dates: `projectionMandateVerdict` only tests
-`state`. This fixture is correct and stays as-is; it will produce both verdicts
-once that mapping is fixed.
+`man_ctv_view.start_date` and `expiry_date` are `VARCHAR(8)` carrying COBOL `YYYYMMDD`, which is
+the MSR contract, and `rs.getDate(...)` asks pgjdbc to parse them as `YYYY-MM-DD`.
+`MandateProjectionDaoIT` declared its fixture columns as `DATE`, so the mismatch was invisible in
+test: a fixture that could not express the production column type.
+
+**Fixed.** `MandateProjectionDao.map` now reads both columns with `rs.getString` and parses them
+through `CcyymmddDate.parse`. Confirmed on the running cluster on 2026-08-07: a book cut from
+these CSVs passed CRR, CTV, CDE and CIR, and reached `DAG_COMPLETE` after CRW emitted.
