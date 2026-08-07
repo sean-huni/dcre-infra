@@ -67,9 +67,9 @@ Host ports:
 | Grafana | 3000 | 3001 (`scripts/lgtm-forward.sh`) |
 | OTLP gRPC / HTTP | 4317 / 4318 | in-cluster `svc/lgtm` |
 
-Databases `dcre_col`, `agt_ops` and `dcre_man` are created by `scripts/crdb-init.sql` (guarded, never DROP) in both environments.
+Databases `dcre_col`, `agt_ops`, `dcre_man` and `dcre_pay` are created by `scripts/crdb-init.sql` (guarded, never DROP) in both environments. `dcre_pay` is the payments family's own database (SCRUM-107): before it existed the payments lane ran in the `dcre-pay` namespace while writing `dcre_col`, which is namespace isolation without data isolation. Assert the full roster with `scripts/verify-databases.sh`.
 
-**Migration note (pre-existing environments):** the initdb path (compose mount, k8s `crdb-init` ConfigMap) runs on FIRST bootstrap only; an environment that already has a CRDB volume or a live cluster does not re-run it. Such environments pick up `dcre_man` via `env-reset.sh` step 4, or manually: `CREATE DATABASE IF NOT EXISTS dcre_man;`.
+**Migration note (pre-existing environments):** the initdb path (compose mount, k8s `crdb-init` ConfigMap) runs on FIRST bootstrap only; an environment that already has a CRDB volume or a live cluster does not re-run it. Such environments pick up `dcre_man` and `dcre_pay` via `env-reset.sh` step 4, or manually: `CREATE DATABASE IF NOT EXISTS dcre_man;` / `CREATE DATABASE IF NOT EXISTS dcre_pay;`.
 
 ## Configuration
 
@@ -100,7 +100,9 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `switch-version.sh <1.0\|1.1\|2.0\|2.0.1\|2.1.0>` | Fleet-wide release switch: sets the AGT image and every `AGT_<STAGE>_IMAGE` env (CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS); refuses 2.x to 1.x, 2.0.1 to 2.0, and any downgrade off 2.1.x |
 | `fint-sim.sh` + `fint_sim_reply.py` | Fintegrate simulator: per client, polls `fint-req/out` for `*_PAIN008.xml`, replies with `{client}_{msgId}_ISR/SBSR/PBSR.xml` into `fint-resp/in` (atomic tmp+rename; every 4th tx RJCT with Rsn AC04), archives the request. M10 mandates leg (`--mandate`): polls `fint-req-man/out` for the mrw outbound `*_PAIN009/010/011.xml` and replies with a pain.012 `ISR`(ACCP)/`SBSR`(PDNG)/`PBSR` trio into `fint-resp-man/in`; PBSR is ACCP, except every 4th mandate RJCT with a rotating reason (AC01/AC04/MD01/MS03) and every 7th a delayed debtor-auth (PDNG then a second `-AUTH_PBSR.xml` ACCP after `--auth-delay-seconds`). Fault selection is a stable digest of the MndtReqId, so replays are byte-identical |
 | `test_fint_sim_reply.py` | Stdlib verification suite for `fint_sim_reply.py` (mandate trio, reason rotation, delayed-auth, replay-idempotency, collections regression): `python3 scripts/test_fint_sim_reply.py` |
-| `crdb-init.sql` | Guarded creation of `dcre_col`, `agt_ops` and `dcre_man` |
+| `crdb-init.sql` | Guarded creation of `dcre_col`, `agt_ops`, `dcre_man` and `dcre_pay`. Kept in lockstep with the `crdb-init` ConfigMap in `k8s/base/02-crdb.yml`: that is the k8s bootstrap authority, this is the compose one |
+| `verify-databases.sh` | Asserts the full database roster exists. Fails CLOSED and never conflates the two failure modes: exit 1 is "read the listing, a database is genuinely absent", exit 2 is "could not read the listing, nothing was learned" |
+| `test-verify-databases.sh` | Red-proofs `verify-databases.sh` against a stub `kubectl`, asserting an exact exit code per branch: `scripts/test-verify-databases.sh` |
 | `seed-liquibase-history.sql` | Pre-creates every module's Liquibase history+lock tables (first-run bootstrap-race guard, idempotent) |
 | `file-trace-query.sql` | The saved cross-DB file-name killer query (SCRUM-58): resolve ANY boundary filename to client/direction/kind/route + ordered step timeline. Run as `rpt_internal`; substitute `:fname`. See the trace runbook below |
 | `audit-file-trace.sh` | Trace-resolution audit gate (SCRUM-58): every exchange file must resolve to >= 1 row from the killer query; exits non-zero listing any untraceable file. Called by the chaos harness as a post-run gate step |

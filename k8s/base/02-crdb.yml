@@ -8,6 +8,13 @@ data:
     CREATE DATABASE IF NOT EXISTS dcre_col;
     CREATE DATABASE IF NOT EXISTS agt_ops;
     CREATE DATABASE IF NOT EXISTS dcre_man;
+    -- SCRUM-107: payments owns its own database. Until this existed, the payments
+    -- lane ran in the dcre-pay Kubernetes namespace while writing dcre_col, which
+    -- is namespace isolation without data isolation.
+    -- Keep in lockstep with scripts/crdb-init.sql: this ConfigMap is the k8s
+    -- bootstrap authority, that file is the compose one, and a database added to
+    -- only one of them exists in only one environment.
+    CREATE DATABASE IF NOT EXISTS dcre_pay;
 ---
 apiVersion: v1
 kind: Service

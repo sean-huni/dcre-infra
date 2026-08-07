@@ -52,14 +52,19 @@ echo "[3/13] stop fint-sim (a stale pre-restructure sim survives resets and keep
 echo "       writing the old flat paths; a fresh one restarts in step 13)"
 pkill -f fint-sim 2>/dev/null || true
 
-echo "[4/13] drop + recreate all three databases"
+echo "[4/13] drop + recreate all four databases"
+# SCRUM-107: dcre_pay joins the reset. A database that escapes the reset is worse
+# than one that is missing: the collections databases come back empty while stale
+# payments rows survive, so a "clean slate" run is quietly not clean.
 kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -e "
   DROP DATABASE IF EXISTS dcre_col CASCADE;
   DROP DATABASE IF EXISTS agt_ops CASCADE;
   DROP DATABASE IF EXISTS dcre_man CASCADE;
+  DROP DATABASE IF EXISTS dcre_pay CASCADE;
   CREATE DATABASE dcre_col;
   CREATE DATABASE agt_ops;
-  CREATE DATABASE dcre_man;"
+  CREATE DATABASE dcre_man;
+  CREATE DATABASE dcre_pay;"
 
 echo "[5/13] drain async schema-change jobs (DROP ... CASCADE returns while its jobs"
 echo "       still run: 'NOTICE: waiting for job(s) to complete'; seeding or scaling"
