@@ -5,17 +5,23 @@
 -- (branch SCRUM-74-feat-mrr); drift in either direction is a review defect.
 --
 -- WHY: whichever M-service boots first would otherwise mint these shared shapes,
--- and concurrent FIRST boots race on the CREATEs (same class as the Liquibase
--- history bootstrap race, see seed-liquibase-history.sql). env-reset.sh applies
--- this file BEFORE any service boots (--database=dcre_man, step 6); the services'
+-- and concurrent FIRST boots race on the CREATEs. env-reset.sh applies this file
+-- BEFORE any service boots (--database=dcre_man, step 6); the services'
 -- MARK_RAN-guarded 000 changesets then converge as no-ops in any boot order.
+--
+-- OPEN QUESTION (SCRUM-107 v1 cutover, 2026-08-08). Infra pre-applying DDL that a
+-- service's MARK_RAN changeset then skips is the same shape as the Liquibase
+-- history seed the owner ruled out that day, and that seed has been deleted. This
+-- file survived it only because the tables have no other owner yet: moving them
+-- into the mandates services' own changelogs is a change in those repositories.
 --
 -- FK relationships are deliberately SHAPE-ONLY (columns + indexes, no DB
 -- constraints) so guarded pre-creates converge from any service order.
 -- Canonical owners arrive with their services (R-04): account master
 -- consolidation = M11. The mandate PROJECTION is no longer part of this core:
--- SCRUM-91 deleted MSR, its only writer, and replaced it with the MRG-derived
--- mnd_ext_status / mandate_effective_status / mandate_current_status views.
+-- SCRUM-91 deleted the mandate state writer, its only writer, and replaced it
+-- with the MRG-derived mnd_ext_status / mandate_effective_status /
+-- mandate_current_status views.
 -- Idempotent throughout: IF NOT EXISTS creates; seeds are per-row
 -- INSERT ... ON CONFLICT DO NOTHING on the BUSINESS identity: (code) for the
 -- two reference tables, (account_number) for account (its PK is a UUID).

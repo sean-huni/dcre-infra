@@ -61,5 +61,9 @@ ORDER BY z.step_at NULLS LAST;
 -- One result set: client, direction, kind (format), route, state, and the ordered step sequence
 -- with timestamps -- ARRIVED/QUARANTINED/DUPLICATE_REDELIVERY -> <STAGE>_INTENDED ->
 -- <STAGE>_<OUTCOME> (ops) interleaved with CRR_INGESTED -> CTV_VALIDATED -> CIR_RESP_STAGED/
--- WRITTEN -> CRW_PLANNED/CRW_VISIBLE -> IXR/SXR/PXR_REPLY -> PRG_REPORTED -> RPT_OUTCOME (business).
+-- WRITTEN -> CRW_PLANNED/CRW_VISIBLE -> CIX/CSX/CPX_REPLY -> CRG_REPORTED -> RPT_OUTCOME (business).
+-- Payments is the same shape under its own names: PRR_INGESTED -> PTV_VALIDATED -> PIR_RESP_STAGED/
+-- WRITTEN -> PRW_PLANNED/PRW_VISIBLE -> PIX/PSX/PPX_REPLY -> PRG_REPORTED.
+-- PRG IS THE PAYMENTS REPORT GENERATOR. Before 2026-08-08 the same token named the COLLECTIONS
+-- one, which is now CRG: read every occurrence of PRG in context, never find-and-replace it.
 -- Zero rows == the file resolves to NO owner record: an untraceable file (the audit-gate red condition).

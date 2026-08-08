@@ -9,7 +9,10 @@ metadata:
 # section 1 item 3). AGT stays in the control namespace `dcre` (with crdb +
 # lgtm shared infra) and launches stage Jobs into the flow namespace of the
 # route family: col- Jobs -> dcre-col, pay- Jobs -> dcre-pay, man- Jobs ->
-# dcre-man (dormant until M10).
+# dcre-man. All three are live: the mandates family shipped in M10 and the
+# payments family in SCRUM-107, each with its OWN database (dcre_col, dcre_pay,
+# dcre_man). Namespace isolation without data isolation is what SCRUM-107 fixed,
+# so a namespace here is never evidence on its own that a family is separated.
 apiVersion: v1
 kind: Namespace
 metadata:

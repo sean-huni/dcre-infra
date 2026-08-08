@@ -63,7 +63,7 @@ java.lang.ArrayIndexOutOfBoundsException: Index 8 out of bounds for length 8
 ```
 
 `man_ctv_view.start_date` and `expiry_date` are `VARCHAR(8)` carrying COBOL `YYYYMMDD`, which is
-the MSR contract, and `rs.getDate(...)` asks pgjdbc to parse them as `YYYY-MM-DD`.
+the mandate projection's contract, and `rs.getDate(...)` asks pgjdbc to parse them as `YYYY-MM-DD`.
 `MandateProjectionDaoIT` declared its fixture columns as `DATE`, so the mismatch was invisible in
 test: a fixture that could not express the production column type.
 

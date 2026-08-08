@@ -29,7 +29,11 @@ REQ_mandates="mrr mrv mas mit mir mrw mix msx mpx mrg"
 # On no sheet by design: cross-family helpers and Gradle dependencies, not
 # services. Listed explicitly so that "present but on no sheet" stays a real
 # finding rather than a permanent false positive nobody reads.
-ALLOWED_platform="platform-batch platform-copybook platform-files platform-test"
+# Corrected 2026-08-08: this listed a `platform-test` that does not exist and
+# omitted `platform-model` and `platform-persistence` that do. The constant is
+# not read by the loop below, which is exactly why it was wrong and stayed wrong:
+# a value nothing executes is a comment wearing the costume of a check.
+ALLOWED_platform="platform-batch platform-copybook platform-files platform-model platform-persistence"
 ALLOWED_shared="hcs rpt"
 
 [ -d "$ROOT" ] || { echo "FAIL: \$DCRE_ROOT '$ROOT' is not a directory."; \

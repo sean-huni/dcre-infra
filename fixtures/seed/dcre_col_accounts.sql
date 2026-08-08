@@ -3,8 +3,8 @@
 --
 -- WHY THIS EXISTS (SCRUM-91, 2026-07-27). dcre_col.account is created by NOTHING
 -- in version control. No Liquibase changelog mints it: the man-core bootstraps
--- create account in dcre_man, not dcre_col, and AIS's 000-bootstrap only guards
--- ordering. The only path was env-reset.sh --seed <accounts.sql> <mandates.sql>,
+-- create account in dcre_man, not dcre_col. The only path was
+-- env-reset.sh --seed <accounts.sql> <mandates.sql>,
 -- and no such file was ever committed. So after every reset the table was absent,
 -- and CtvValidationService called referenceSnapshot.accountsByNumber(...)
 -- UNCONDITIONALLY, before the mandate-source branch, so CTV TECH-failed on
@@ -21,7 +21,10 @@
 --
 -- Canonical DDL is lifted verbatim from the toolkit's generated
 -- fnb_dcre_ctv_toolkit/dcre_accounts.sql so the two cannot drift.
--- Ownership stays R-04: AIS is the single writer, CTV holds SELECT only.
+-- Ownership: R-04 named a single writer for this table, and the 2026-08-08
+-- rename removed it from collections entirely (ais became the PAYMENTS service
+-- pai). dcre_col.account therefore has NO writer today and this seed is its only
+-- source; CTV still holds SELECT only. Do not infer an owner from this file.
 -- ==========================================================================
 
 CREATE TABLE IF NOT EXISTS account (

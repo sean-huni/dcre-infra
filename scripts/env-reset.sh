@@ -28,11 +28,11 @@ sqlval() {
     2>/dev/null | tail -1 | tr -d '[:space:]'
 }
 
-echo "[1/13] stop AGT first (watcher/reconciler/clocks must not write to a dropped DB)"
+echo "[1/12] stop AGT first (watcher/reconciler/clocks must not write to a dropped DB)"
 kubectl scale deploy dcre-agt -n $NS --replicas=0
 kubectl wait --for=delete pod -l app=dcre-agt -n $NS --timeout=90s 2>/dev/null || true
 
-echo "[2/13] delete all Jobs and stage pods across control + flow namespaces"
+echo "[2/12] delete all Jobs and stage pods across control + flow namespaces"
 echo "       (SCRUM-70: stage Jobs live in dcre-col/dcre-pay/dcre-man; crdb-0 in"
 echo "       $NS is NOT dcre-* prefixed: kept)"
 for ns in dcre dcre-col dcre-pay dcre-man; do
@@ -48,15 +48,19 @@ for ns in dcre dcre-col dcre-pay dcre-man; do
   fi
 done
 
-echo "[3/13] stop fint-sim (a stale pre-restructure sim survives resets and keeps"
-echo "       writing the old flat paths; a fresh one restarts in step 13)"
+echo "[3/12] stop fint-sim (a stale pre-restructure sim survives resets and keeps"
+echo "       writing the old flat paths; a fresh one restarts in step 12)"
 pkill -f fint-sim 2>/dev/null || true
 
-echo "[4/13] drop + recreate all four databases"
+echo "[4/12] drop + recreate all four databases"
 # SCRUM-107: dcre_pay joins the reset. A database that escapes the reset is worse
 # than one that is missing: the collections databases come back empty while stale
 # payments rows survive, so a "clean slate" run is quietly not clean.
-kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -e "
+# --database=defaultdb is EXPLICIT and load-bearing: defaultdb is the one database
+# not being dropped, and a defaulted connection database is how 22 Liquibase
+# history tables once landed somewhere nobody was looking while the verify step
+# correctly found zero.
+kubectl exec -n $NS crdb-0 -- cockroach sql --insecure --database=defaultdb -e "
   DROP DATABASE IF EXISTS dcre_col CASCADE;
   DROP DATABASE IF EXISTS agt_ops CASCADE;
   DROP DATABASE IF EXISTS dcre_man CASCADE;
@@ -66,7 +70,7 @@ kubectl exec -n $NS crdb-0 -- cockroach sql --insecure -e "
   CREATE DATABASE dcre_man;
   CREATE DATABASE dcre_pay;"
 
-echo "[5/13] drain async schema-change jobs (DROP ... CASCADE returns while its jobs"
+echo "[5/12] drain async schema-change jobs (DROP ... CASCADE returns while its jobs"
 echo "       still run: 'NOTICE: waiting for job(s) to complete'; seeding or scaling"
 echo "       into that window collides with half-materialized metadata)"
 # SCHEMA CHANGE GC excluded: it only reclaims data ranges later and can linger.
@@ -82,12 +86,29 @@ while :; do
   sleep 5
 done
 
-echo "[6/13] pre-seed Liquibase history+lock tables, ONLY after the drain"
-echo "       (first-run bootstrap-race guard; idempotent IF NOT EXISTS)"
-kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_col \
-  < $INFRA/scripts/seed-liquibase-history.sql > /dev/null
-echo "       apply the CANONICAL dcre_man shared-core DDL+seed (seed-man-core.sql;"
+echo "[6/12] apply the CANONICAL dcre_man shared-core DDL+seed (seed-man-core.sql;"
 echo "       services' MARK_RAN 000 bootstraps converge on it in any boot order)"
+# SCRUM-107 v1 cutover: seed-liquibase-history.sql is DELETED and no longer applied
+# here. It pre-created every module's Liquibase history+lock tables so a fresh
+# database already had them, which is precisely the "hacking around the liquibase
+# scripts" the owner ruled out on 2026-08-08. On version 1 there is no history to
+# seed: every table is minted by a changeset that actually ran, or it does not
+# exist.
+#
+# WHAT THAT GIVES BACK, stated plainly rather than dropped quietly: the file
+# existed to stop concurrent FIRST runs of the SAME service racing on
+# CREATE TABLE <svc>_databasechangelog, because the lock table does not exist yet
+# and so nothing serialises the bootstrap. The loser crashes with
+# "relation already exists" (M7 straight-cycle e2e, 2026-07-13). That race is now
+# unguarded here. The correct home for the fix is each service's own changelog
+# (Liquibase's own lock, or a first-run warm-up that runs each stage once
+# serially before parallel traffic), NOT infra pre-creating the table. See the
+# cutover report; this is an owner decision, not one to paper over here.
+#
+# OPEN, SAME CLASS: seed-man-core.sql below still pre-applies shared-core DDL that
+# the mandates services' MARK_RAN 000 bootstraps then skip. It is left in place
+# because removing it needs the owning changelogs in the mandates repos to take
+# the tables over, which is a change in those repos, not in infra.
 kubectl exec -i -n $NS crdb-0 -- cockroach sql --insecure --database=dcre_man \
   < $INFRA/scripts/seed-man-core.sql > /dev/null
 typeset -i cguard=0
@@ -106,50 +127,19 @@ while :; do
 done
 echo "       dcre_man shared-core: 3 core tables present"
 
-echo "[7/13] verify all 46 history+lock tables exist BEFORE any service comes back"
-echo "       (24 dcre_col + 20 dcre_man + 2 agt_ops; per-database guards below)"
-# SCRUM-91: dcre_man went 18 -> 20. The roster lost mar and msr (retired, repos
-# archived) and gained the three per-leg readers mix, msx and mpx: 9 services
-# became 10. The count is deliberately exact, not a lower bound, so a stale
-# roster fails the reset here rather than silently racing a service bootstrap.
-typeset -i vguard=0
-while :; do
-  lbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_col] WHERE table_name LIKE '%databasechangelog%';") || lbt=""
-  [[ "$lbt" == "24" ]] && break
-  vguard+=1
-  if (( vguard > 6 )); then
-    echo "ERROR: expected 24 Liquibase history+lock tables in dcre_col, found ${lbt:-0}." >&2
-    echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
-    exit 1
-  fi
-  sleep 5
-done
-typeset -i mguard=0
-while :; do
-  mbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM dcre_man] WHERE table_name LIKE '%databasechangelog%';") || mbt=""
-  [[ "$mbt" == "20" ]] && break
-  mguard+=1
-  if (( mguard > 6 )); then
-    echo "ERROR: expected 20 Liquibase history+lock tables in dcre_man, found ${mbt:-0}." >&2
-    echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
-    exit 1
-  fi
-  sleep 5
-done
-typeset -i rguard=0
-while :; do
-  rbt=$(sqlval "SELECT count(*) FROM [SHOW TABLES FROM agt_ops] WHERE table_name LIKE 'rpt_databasechangelog%';") || rbt=""
-  [[ "$rbt" == "2" ]] && break
-  rguard+=1
-  if (( rguard > 6 )); then
-    echo "ERROR: expected 2 rpt Liquibase history+lock tables in agt_ops, found ${rbt:-0}." >&2
-    echo "       NOT scaling AGT up: a service bootstrapping Liquibase now would race the seed." >&2
-    exit 1
-  fi
-  sleep 5
-done
+# The 46-history-table verification that stood here is GONE with the seed it
+# verified. It asserted that dcre_col held 24, dcre_man 20 and agt_ops 2 Liquibase
+# history+lock tables BEFORE any service returned. Nothing pre-creates those
+# tables on version 1, so the assertion could only ever have failed, and an
+# assertion that cannot pass is not a stricter gate, it is a broken reset.
+#
+# It is NOT replaced by a weaker version of itself. The property it was really
+# guarding (each family database holds its own objects and no other family's) is
+# now asserted AFTER the services have run, by scripts/cutover-v1.sh --audit-only,
+# where the tables actually exist and where a foreign-family table is a finding
+# rather than a race.
 
-echo "[8/13] clean exchange dirs, per-client tree (find -delete: zsh glob rm aborts on"
+echo "[7/12] clean exchange dirs, per-client tree (find -delete: zsh glob rm aborts on"
 echo "       empty dirs; tracked .gitkeep files are kept)"
 for base in $CLIENTS; do
   find $EX/$base -type f ! -name '.gitkeep' -delete 2>/dev/null || true
@@ -157,11 +147,16 @@ done
 find $EX/outcomes -type f ! -name '.gitkeep' -delete 2>/dev/null || true
 rm -f $EX/.reset-stamp
 
-echo "[9/13] restart AGT (applies its Liquibase, watcher+clocks resume)"
+echo "[8/12] restart AGT (applies its Liquibase, watcher+clocks resume)"
 kubectl scale deploy dcre-agt -n $NS --replicas=1
 kubectl rollout status deploy/dcre-agt -n $NS --timeout=120s
 
-echo "[10/13] reference seed BEFORE warm-up (seed DDL creates account/mandate;\n        AIS 000-bootstrap only guards ordering and runs far too late for warm-up)"
+echo "[9/12] reference seed BEFORE warm-up: the seed DDL is what creates"
+echo "        dcre_col.account and dcre_col.mandate. NOTHING in version control"
+echo "        mints them since the 2026-08-08 rename retired ais (it became the"
+echo "        PAYMENTS service pai and left collections entirely), so the R-04"
+echo "        single-writer of dcre_col.account is currently UNASSIGNED. Do not"
+echo "        infer an owner from this comment: --seed is the only path today."
 if [[ -n "$SEED_ACCOUNTS" ]]; then
   for f in $SEED_ACCOUNTS $SEED_MANDATES; do
     [[ -f $f ]] || { echo "ERROR: seed file not found: $f" >&2; exit 1; }
@@ -176,7 +171,7 @@ else
   echo "        skipped (no --seed): load accounts/mandates SQL before real fixtures"
 fi
 
-echo "[11/13] warm-up drops: one tiny file per route so every service's Liquibase"
+echo "[10/12] warm-up drops: one tiny file per route so every service's Liquibase"
 echo "        recreates its tables (files NACK against a fresh seed: expected, harmless)"
 WARM_REQ_IN=$EX/fnbrf01/onhost-req/in
 WARM_ENDO_IN=$EX/fnbrf01/onhost-req-endo/in
@@ -199,11 +194,13 @@ if [[ -n "$SEED_ACCOUNTS" ]]; then
     (( guard > 60 )) && { echo "ERROR: reference tables missing after 10min despite seed" >&2; exit 1; }
   done
 else
-  echo "WARN: no --seed given; account/mandate do not exist until a seed or AIS runs." >&2
+  echo "WARN: no --seed given; dcre_col.account and dcre_col.mandate do not exist" >&2
+  echo "      at all. Their former minter (ais) is retired, so --seed is the only" >&2
+  echo "      path that creates them." >&2
   echo "      CTV warm-up will TECH-fail (relation account does not exist) until then." >&2
 fi
 
-echo "[12/13] post-checks + reset stamp"
+echo "[11/12] post-checks + reset stamp"
 typeset -i hguard=0
 ph=""
 while :; do
@@ -227,21 +224,21 @@ echo "        EXPECTED; subtract this baseline in later pass-rate accounting."
 # SCRUM-91 dropped. Do not "fix" this to point at dcre_man.
 #
 # Degrades to a WARN instead of aborting the reset. Without --seed neither table
-# exists until AIS applies its Liquibase, and step 11 already prints that warning
+# exists until --seed loads it, and step 10 already prints that warning
 # itself, so a bare query here made the script fail on the very condition it had
 # just predicted. A post-CHECK must never be the thing that kills the reset.
 acct=$(sqlval "SELECT count(*) FROM account;" dcre_col) || acct=""
 mndt=$(sqlval "SELECT count(*) FROM mandate;" dcre_col) || mndt=""
 if [[ -z "$acct" || -z "$mndt" ]]; then
   echo "WARN: reference data absent (accounts=${acct:-n/a} mandates=${mndt:-n/a}); account/mandate" >&2
-  echo "      are minted by AIS's Liquibase or by --seed. CTV gating stays fail-closed until then." >&2
+  echo "      are minted ONLY by --seed since ais retired. CTV gating stays fail-closed until then." >&2
 else
   echo "        reference data: $acct accounts, $mndt mandates"
 fi
 date +%s > $EX/.reset-stamp
 echo "        reset stamp written: $EX/.reset-stamp ($(cat $EX/.reset-stamp))"
 
-echo "[13/13] restart fint-sim (nohup, background; consumes per-client fint-req/out)"
+echo "[12/12] restart fint-sim (nohup, background; consumes per-client fint-req/out)"
 nohup $INFRA/scripts/fint-sim.sh > /tmp/fint-sim.log 2>&1 &
 disown
 echo "        fint-sim pid $!, log /tmp/fint-sim.log"

@@ -26,7 +26,9 @@ the outbound (omitted for pre-A-69 files, so old fixtures stay byte-identical):
 The every-Nth selector is a stable digest of the MndtReqId (the mrw full-identity
 key), NOT a mutable counter, so re-running the sim on the same outbound re-emits
 byte-identical replies (deterministic, replayable). Distinct filename stems per
-token (R-16) keep MAR's UNIQUE(response_file, mndt_req_id) rows apart.
+token (R-16) keep the per-leg readers' UNIQUE(response_file, mndt_req_id) rows
+apart. Those readers are mix, msx and mpx: the single merged reader that owned
+that constraint was retired by SCRUM-91 and split three ways.
 """
 import argparse
 import hashlib
@@ -94,8 +96,9 @@ def _ordinal(mndt_req_id: str) -> int:
 
 def _leg(token, out_msg_id, mndt_req_id, mndt_id, status, rsn=None, e2e=None):
     reason = f"  <Rsn>{rsn}</Rsn>\n" if rsn else ""
-    # A-69: echo the outbound OrgnlEndToEndId (after MndtId, before MndtSts) so MAR
-    # captures a non-NULL e2e. Omitted when the outbound carried none (graceful).
+    # A-69: echo the outbound OrgnlEndToEndId (after MndtId, before MndtSts) so the
+    # per-leg readers (mix, msx, mpx) capture a non-NULL e2e. Omitted when the
+    # outbound carried none (graceful).
     orgnl_e2e = f"  <OrgnlEndToEndId>{e2e}</OrgnlEndToEndId>\n" if e2e else ""
     return (f"<{token}>\n"
             f"  <!-- SYNTHETIC-CONTRACT pain.012 {token} acceptance report (A-60) -->\n"
