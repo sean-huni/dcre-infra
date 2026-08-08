@@ -34,12 +34,59 @@ REQ_mandates="mrr mrv mas mit mir mrw mix msx mpx mrg"
 # not read by the loop below, which is exactly why it was wrong and stayed wrong:
 # a value nothing executes is a comment wearing the costume of a check.
 ALLOWED_platform="platform-batch platform-copybook platform-files platform-model platform-persistence"
-ALLOWED_shared="hcs rpt"
+# SCRUM-107 adds `acs`, the account reference service. Like hcs and rpt it is
+# cross-family and appears on no diagram sheet, which is why it is declared here:
+# the sheets are the specification for the three FAMILIES, and a shared context
+# that no sheet shows would otherwise read as drift forever.
+ALLOWED_shared="acs hcs rpt"
 
 [ -d "$ROOT" ] || { echo "FAIL: \$DCRE_ROOT '$ROOT' is not a directory."; \
                     echo "      The tree was not read, so no conclusion is drawn."; exit 2; }
 
+# A NAME IS NOT A SERVICE. Until 2026-08-08 this gate tested `[ -d ]` only, so a
+# directory that merely looked like a service satisfied it. It printed
+# "shared 3 present, conformant" while shared/acs had no .git at all: from inside
+# it `git rev-parse --show-toplevel` returned $HOME, because the home repo's
+# ignore rules were swallowing the whole tree. Every service here is its OWN
+# repository, so a service without one is unpushable, unreviewable and invisible
+# to every other engineer, which is precisely the isolation this split exists to
+# provide. Four independent audit lenses also missed it, because they all asked
+# "is the directory there" rather than "is it the thing".
+#
+# Echoes a defect string, or nothing. Empty means healthy.
+# ASK GIT FIRST, not the filesystem. An earlier version tested `[ ! -e .git ]`
+# up front and returned "no-git" immediately, which made the ancestor-ownership
+# arm unreachable for the ONLY case that has actually occurred: shared/acs had no
+# .git of its own AND resolved to $HOME, because the home repo was swallowing the
+# tree. "no-git" says the directory is not a repo; "owned-by-/Users/sean" says
+# which repo has captured it, and only the second sentence tells you what to fix.
+repo_defect() {
+  d="${1%/}"
+  # A .git that belongs to an ANCESTOR is the same defect wearing a disguise:
+  # the directory is tracked by some outer repo rather than being its own.
+  #
+  # Compare PHYSICAL paths on both sides. `git rev-parse --show-toplevel` always
+  # resolves symlinks, so comparing it against a logical path reports every
+  # service as ancestor-owned the moment any parent is a symlink. On macOS /tmp
+  # is a symlink to /private/tmp, which made a fully healthy fixture fail all 36
+  # checks on 2026-08-08. The real tree passed only because it happens to live
+  # somewhere with no symlink in the path, which is luck, not correctness.
+  phys=$(cd "$d" 2>/dev/null && pwd -P)
+  top=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)
+  if [ -z "$phys" ]; then
+    echo " $(basename "$d"):unreadable-path"
+  elif [ -z "$top" ]; then
+    # git could not resolve a toplevel at all: no repo anywhere up the tree.
+    echo " $(basename "$d"):no-git"
+  elif [ "$top" != "$phys" ]; then
+    echo " $(basename "$d"):owned-by-$top"
+  elif ! git -C "$d" remote get-url origin >/dev/null 2>&1; then
+    echo " $(basename "$d"):no-origin"
+  fi
+}
+
 rc=0
+not_a_repo=""
 for fam in collections payments mandates; do
   eval "req=\$REQ_$fam"
   [ -d "$ROOT/$fam" ] || { echo "FAIL: family directory '$fam' is absent entirely."; rc=1; continue; }
@@ -48,6 +95,7 @@ for fam in collections payments mandates; do
   for d in "$ROOT/$fam"/*/; do
     [ -d "$d" ] || continue
     present="$present $(basename "$d")"
+    not_a_repo="$not_a_repo$(repo_defect "$d")"
   done
   present="$present "
 
@@ -96,6 +144,7 @@ for grp in platform shared; do
   for d in "$ROOT/$grp"/*/; do
     [ -d "$d" ] || continue
     present="$present $(basename "$d")"
+    not_a_repo="$not_a_repo$(repo_defect "$d")"
   done
   present="$present "
   [ "$present" = " " ] && { echo "FAIL: '$grp' contains no directories at all."; \
@@ -134,8 +183,20 @@ for fam in collections payments mandates; do
                         echo "      A short required-set makes this gate pass vacuously."; exit 2; }
 done
 
+if [ -n "$not_a_repo" ]; then
+  echo "FAIL: directories present by NAME but not standalone git repositories:$not_a_repo"
+  echo "      no-git        = no .git at all, so it cannot be pushed or reviewed"
+  echo "      owned-by-PATH = tracked by an ANCESTOR repo, not its own"
+  echo "      git-unreadable= .git exists but git could not read it"
+  echo "      no-origin     = a repo with no remote, so it exists only on this machine"
+  echo "      A name is not a service. This gate passed a directory with no .git"
+  echo "      on 2026-08-08 because it tested only that the folder existed."
+  rc=1
+fi
+
 if [ "$rc" -eq 0 ]; then
-  echo "PASS: all three families match the diagrams by name."
+  echo "PASS: all three families match the diagrams by name, and every service is"
+  echo "      its own git repository with a remote."
 else
   echo "FAIL: topology deviates from the diagrams. This is an imminent failure,"
   echo "      not a nitpick. Fix the gaps, then re-run. If they are still not"
