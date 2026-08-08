@@ -82,6 +82,48 @@ for fam in collections payments mandates; do
   [ -n "$extra" ]   && rc=1
 done
 
+# The non-service directories are checked too, against the same three-direction
+# rule. Until 2026-08-08 these two constants were declared and never read: the
+# loop above only walked the three families. The dead constant then drifted
+# unnoticed, naming a `platform-test` that does not exist and omitting
+# `platform-model` and `platform-persistence` that do, which is exactly what a
+# value nothing executes does. Reading them here is what makes them a check.
+for grp in platform shared; do
+  eval "allowed=\$ALLOWED_$grp"
+  [ -d "$ROOT/$grp" ] || { echo "FAIL: '$grp' directory is absent entirely."; rc=1; continue; }
+
+  present=""
+  for d in "$ROOT/$grp"/*/; do
+    [ -d "$d" ] || continue
+    present="$present $(basename "$d")"
+  done
+  present="$present "
+  [ "$present" = " " ] && { echo "FAIL: '$grp' contains no directories at all."; \
+                            echo "      Treating as unreadable, not as 'all absent'."; exit 2; }
+
+  missing=""
+  for s in $allowed; do
+    case "$present" in *" $s "*) ;; *) missing="$missing $s" ;; esac
+  done
+
+  extra=""
+  for p in $present; do
+    case " $allowed " in *" $p "*) continue ;; esac
+    extra="$extra $p"
+  done
+
+  n_allowed=$(echo "$allowed" | wc -w | tr -d ' ')
+  n_have=$(echo "$present" | wc -w | tr -d ' ')
+  printf "%-12s %s expected, %s present" "$grp" "$n_allowed" "$n_have"
+  [ -n "$missing" ] && printf ", ABSENT:%s" "$missing"
+  [ -n "$extra" ]   && printf ", UNDECLARED:%s" "$extra"
+  [ -z "$missing" ] && [ -z "$extra" ] && printf ", conformant"
+  printf "\n"
+
+  [ -n "$missing" ] && rc=1
+  [ -n "$extra" ]   && rc=1
+done
+
 # Positive control: the required sets must be non-empty and distinct, so a
 # truncated or duplicated constant cannot make this script pass by comparing
 # nothing against nothing.
