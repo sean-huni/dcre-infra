@@ -6,7 +6,7 @@ Dev infrastructure for DCRE 3.0 (collections, payments and mandates): kind clust
 
 Provides the two local environments the DCRE fleet runs against: a Docker Compose inner loop and a kind cluster for pipeline DevTesting, both on the same images (dev/prod parity). It also carries the operational runbooks as scripts: 13-step clean-slate reset, fleet release switcher with downgrade guards, port-forward self-healing, and the Fintegrate reply simulator that closes the pain.008 to pain.002-family loop.
 
-The fleet is 28 Spring Batch stage services across three families, plus 2 cross-family services, 5 platform libraries and the Quarkus AGT orchestrator. Verified on disk 2026-08-08:
+The fleet is 28 Spring Batch stage services across three families, plus 2 cross-family services, 5 platform libraries and the Quarkus AGT orchestrator. Verified on disk 2026-08-08, after the v1 cutover work:
 
 ```bash
 cd ~/env/repo/be/java/spring/dcre
@@ -14,10 +14,17 @@ for f in collections payments mandates shared platform; do
   printf "%s: " "$f"
   for d in $f/*/; do [ -f "$d/build.gradle" ] && [ -d "$d/src/main" ] && echo "$d"; done | wc -l
 done
-# collections: 9   payments: 8   mandates: 10   shared: 2   platform: 5
+# collections: 9   payments: 9   mandates: 10   shared: 2   platform: 5
 ```
 
-27 of the required 28 were present on that date; `payments/prg` was under construction. The canonical set is the diagrams' set (design-register R-49) and must be compared as a SET, never as a count:
+All 28 required services are present, and a count is not what proves it: compare the SET, since a family can hold exactly the right NUMBER of services and be wholly non-conformant. `scripts/verify-topology.sh` does that comparison by name and is the gate:
+
+```bash
+./scripts/verify-topology.sh; echo "exit=$?"
+#   0 conformant | 1 deviates | 2 the tree could not be read, which is NOT a pass
+```
+
+The canonical set is the diagrams' set (design-register R-49):
 
 ```
 collections/   crr ctv cde crw cir   cix csx cpx   crg     -> dcre_col
@@ -38,7 +45,8 @@ Four services were renamed on 2026-08-08: `ixr sxr pxr` became `cix csx cpx` and
 
 - **SOLID, applied here:** one script per responsibility (`crdb-forward.sh` only forwards, `lgtm-up.sh` only revives the observability stack, `env-reset.sh` only resets); each is standalone and idempotent, and `kind-up.sh` composes them instead of duplicating them. Manifests (`k8s/base`, kustomize), scripts, and fixtures are separate seams.
 - **12FactorApp Alignment - https://12factor.net/:** config strictly from the environment (`.env.example` documents the committed working defaults; clean-clone rule: everything runs with NO `.env`, the file is the override point); dev/prod parity (identical `cockroachdb/cockroach:v26.2.3` and `grafana/otel-lgtm:0.29.0` images in compose and kind); backing services as attached resources (DB via JDBC URL, telemetry via `OTEL_EXPORTER_OTLP_ENDPOINT`); stage services are stateless one-shot processes minted as k8s Jobs by AGT.
-- **Idempotent restart semantics:** `crdb-init.sql` is guarded (`CREATE DATABASE IF NOT EXISTS`, never DROP); `seed-liquibase-history.sql` is `IF NOT EXISTS` throughout; the forward scripts kill-and-restart safely; `env-reset.sh` step ordering is load-bearing (AGT down first, schema-change job drain before seeding, Liquibase history verified before any service returns).
+- **Idempotent restart semantics:** `crdb-init.sql` is guarded (`CREATE DATABASE IF NOT EXISTS`, never DROP); the forward scripts kill-and-restart safely; `env-reset.sh` step ordering is load-bearing (AGT down first, schema-change job drain before any seed).
+- **Liquibase owns every schema (version 1, owner directive 2026-08-08):** nothing in this repo pre-creates a Liquibase history table or seeds a changelog. `seed-liquibase-history.sql` did exactly that and has been DELETED, along with the reset step that applied it and the 46-table count that verified it. A v1 schema nobody can prove came from a changeset is not a v1 schema. One item of the same class survives and is flagged rather than hidden: `seed-man-core.sql` still pre-applies shared-core DDL that the mandates services' MARK_RAN changesets then skip, because those tables have no owning changelog yet.
 - **Guard rails over convention:** `switch-version.sh` refuses fleet downgrades that would durably poison data (2.0 boundary, 2.0.1 A-45 fix, 2.1.x per-client tree and attempt schema).
 
 ## Exchange directory contract (R-30/R-31, per-client SCRUM-42)
@@ -121,14 +129,14 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `rpt-accuracy-check.sh` | 60-assertion accuracy matrix (19 per-client checks x 3 clients, plus 2 ops checks and 1 cross-client integrity assertion; counted 2026-08-08 from the `check` call sites and the trailing inline assertion): independent raw-SQL derivation from base tables (as `root`) vs the rpt views the dashboards display (as each client / `rpt_internal`); fail-closed (empty/non-numeric FAILS), exits non-zero on any mismatch (spec gate) |
 | `rpt-security-probes.sh` | Negative security probes: grants wall (client role denied on `public.*` and ops views, asserting SQLSTATE 42501) plus per-view cross-client scoping and a non-emptiness canary; exits non-zero on any unexpected access |
 | `grafana-screenshots.mjs` | Playwright (headless chromium) evidence capture: logs in as each org user and screenshots every dashboard, proving per-client isolation and full panel rendering (tall viewport so lazy panels paint). Manifest: `scripts/package.json` |
-| `env-reset.sh [--seed accounts.sql mandates.sql]` | 13-step clean slate: stop AGT, delete Jobs/pods, stop fint-sim, drop+recreate all four DBs, drain CRDB schema-change jobs, pre-seed and verify all 46 Liquibase history+lock tables (24 in `dcre_col`, 20 in `dcre_man`, 2 `rpt_*` in `agt_ops`; counted 2026-08-08 with `grep -cE '[a-z_]+_databasechangelog(lock)? \(' scripts/seed-liquibase-history.sql`, 23 of each). **The `dcre_col` roster is KNOWN STALE**: it seeds `crr ctv cir cde crw ixr sxr pxr prg ais hcs rpt`, so four of the twelve are the pre-2026-08-08 names (`ixr sxr pxr ais`), `prg` there is the collections generator now called `crg`, and **no payments service has a history table anywhere**, leaving `dcre_pay` created but never seeded. The seed file's own header comment claims 44 tables and is likewise wrong. Fixing this is a change to the SQL, not to this README. Clean the exchange, restart AGT, optional reference reseed, warm-up drops per route, post-checks, restart fint-sim |
-| `switch-version.sh <1.0\|1.1\|2.0\|2.0.1\|2.1.0\|2.2.0\|2.3.0>` | Fleet-wide release switch: sets the AGT image and every `AGT_<STAGE>_IMAGE` env; targets 2.3.0 and above additionally export the mandates set (MRR MRV MAS MIT MIR MRW MIX MSX MPX MRG). **The base `STAGES` array is KNOWN STALE as of 2026-08-08** (`scripts/switch-version.sh:53` reads `CRR CTV CIR CDE CRW IXR SXR PXR PRG AIS HCS`): `IXR SXR PXR` were renamed `CIX CSX CPX`, `AIS` was renamed `PAI` and moved to payments, `PRG` there means the collections generator now called `CRG`, and no payments stage is exported at all. Documented rather than silently corrected, because fixing it is a code change on the script; until it lands the switcher cannot point the renamed or the payments services at a release. Refuses 2.x to 1.x, 2.0.1 to 2.0, and any downgrade off 2.1.x |
+| `env-reset.sh [--seed accounts.sql mandates.sql]` | 12-step clean slate: stop AGT, delete Jobs/pods, stop fint-sim, drop+recreate all four DBs (connected to `defaultdb` explicitly), drain CRDB schema-change jobs, apply the `dcre_man` shared core, clean the exchange, restart AGT, optional reference reseed, warm-up drops per route, post-checks, restart fint-sim. It no longer pre-seeds or counts Liquibase history tables: that step and the file behind it were deleted for version 1 |
+| `cutover-v1.sh [--yes-drop-everything] [--audit-only]` | The version 1 direct cutover: drops all four databases and lets each service's Liquibase build v1 from scratch. **Refuses without `--yes-drop-everything`**, and refuses on any cluster that is not the kind dev cluster (three independent checks: context name, the cluster the context points at, and the `dcre-dev-control-plane` node). Prints the exact `DROP DATABASE` list before either guard runs. Afterwards it recreates the four databases, calls `verify-databases.sh`, and runs a per-family isolation audit asserting that each database holds its OWN objects and none of another family's, with a positive control so that a reported absence is trustworthy. Exit codes: `0` isolated, `1` a family database holds another family's objects, `2` unreadable (not a pass), `3` PENDING because no changelog has run yet. `--audit-only` runs the audit and nothing else |
+| `switch-version.sh <1.MINOR.PATCH>` | Fleet-wide release switch for the **version 1 line only**: sets the AGT image and all 29 `AGT_<STAGE>_IMAGE` envs (9 collections, 9 payments, 10 mandates, plus cross-family `HCS`; `RPT` is not launched as a Job so it takes no image env). Rewritten in bash on 2026-08-08 with the correct roster; it carries a positive control on the roster's own shape and a guard that refuses if any retired name reappears in it. **Refuses every pre-cutover target** (`1.0`, `1.1`, any `2.x`): those lines shipped image names that are no longer built, so pointing AGT at them would wedge every stage on `ImagePullBackOff`, and the databases they wrote no longer exist. Within v1, refuses a downgrade below the running version |
 | `fint-sim.sh` + `fint_sim_reply.py` | Fintegrate simulator: per client, polls `fint-req/out` for `*_PAIN008.xml`, replies with `{client}_{msgId}_ISR/SBSR/PBSR.xml` into `fint-resp/in` (atomic tmp+rename; every 4th tx RJCT with Rsn AC04), archives the request. M10 mandates leg (`--mandate`): polls `fint-req-man/out` for the mrw outbound `*_PAIN009/010/011.xml` and replies with a pain.012 `ISR`(ACCP)/`SBSR`(PDNG)/`PBSR` trio into `fint-resp-man/in`; PBSR is ACCP, except every 4th mandate RJCT with a rotating reason (AC01/AC04/MD01/MS03) and every 7th a delayed debtor-auth (PDNG then a second `-AUTH_PBSR.xml` ACCP after `--auth-delay-seconds`). Fault selection is a stable digest of the MndtReqId, so replays are byte-identical |
 | `test_fint_sim_reply.py` | Stdlib verification suite for `fint_sim_reply.py` (mandate trio, reason rotation, delayed-auth, replay-idempotency, collections regression): `python3 scripts/test_fint_sim_reply.py` |
 | `crdb-init.sql` | Guarded creation of `dcre_col`, `agt_ops`, `dcre_man` and `dcre_pay`. Kept in lockstep with the `crdb-init` ConfigMap in `k8s/base/02-crdb.yml`: that is the k8s bootstrap authority, this is the compose one |
 | `verify-databases.sh` | Asserts the full database roster exists. Fails CLOSED and never conflates the two failure modes: exit 1 is "read the listing, a database is genuinely absent", exit 2 is "could not read the listing, nothing was learned" |
 | `test-verify-databases.sh` | Red-proofs `verify-databases.sh` against a stub `kubectl`, asserting an exact exit code per branch: `scripts/test-verify-databases.sh` |
-| `seed-liquibase-history.sql` | Pre-creates every module's Liquibase history+lock tables (first-run bootstrap-race guard, idempotent) |
 | `file-trace-query.sql` | The saved cross-DB file-name killer query (SCRUM-58): resolve ANY boundary filename to client/direction/kind/route + ordered step timeline. Run as `rpt_internal`; substitute `:fname`. See the trace runbook below |
 | `audit-file-trace.sh` | Trace-resolution audit gate (SCRUM-58): every exchange file must resolve to >= 1 row from the killer query; exits non-zero listing any untraceable file. Called by the chaos harness as a post-run gate step |
 
@@ -143,7 +151,7 @@ Stage images are built in each service repo, then loaded into the cluster; AGT (
 ./gradlew build && docker build -f src/main/docker/Dockerfile.jvm.prod -t dcre-agt:TAG .
 
 # Back here: switch the whole fleet to a release (never mixed versions)
-./scripts/switch-version.sh 2.1.0
+./scripts/switch-version.sh 1.0.0
 
 # Clean slate before a test round (optionally reseed reference data)
 ./scripts/env-reset.sh --seed accounts.sql mandates.sql
@@ -171,7 +179,7 @@ The ambient `GRAFANA_URL` (used by the Grafana MCP) points at the *compose* LGTM
 ./scripts/grafana-provision.sh     # 4 orgs + per-role scoped datasources (login devdev)
 ./scripts/grafana-dashboards.sh    # client + internal dashboard packs
 ./scripts/rpt-security-probes.sh   # grants wall + cross-client scoping (exit 0 = pass)
-./scripts/rpt-accuracy-check.sh    # 54-check accuracy matrix (exit 0 = pass)
+./scripts/rpt-accuracy-check.sh    # 60-assertion accuracy matrix (exit 0 = pass)
 
 # Screenshot evidence (Playwright; first run installs deps + the browser):
 cd scripts && npm install && npx playwright install chromium
@@ -201,7 +209,7 @@ sed "s/:fname/'${FNAME}'/g" scripts/file-trace-query.sql \
   | cockroach sql --insecure --host=localhost:26257 --user=rpt_internal --database=dcre_col
 ```
 
-The `--database` is passed explicitly (ops-scripting discipline); the query itself resolves everything through fully-qualified 3-part names, so the connected database is otherwise irrelevant. The result is one ordered set: client, direction, kind, route, state, then the step timeline (`ARRIVED`/`QUARANTINED`/`DUPLICATE_REDELIVERY` and `<STAGE>_INTENDED`/`<STAGE>_<OUTCOME>` from the ops side interleaved with `CRR_INGESTED` -> `CTV_VALIDATED` -> `CIR_RESP_STAGED`/`WRITTEN` -> `CRW_PLANNED`/`CRW_VISIBLE` -> `CIX`/`CSX`/`CPX_REPLY` -> `CRG_REPORTED` -> `RPT_OUTCOME` from the business side; the payments equivalents are `PRR`/`PTV`/`PIR`/`PRW` and `PIX`/`PSX`/`PPX_REPLY` -> `PRG_REPORTED`). Note that `scripts/file-trace-query.sql:64` still emits the pre-rename step labels; the query is code and is corrected separately.
+The `--database` is passed explicitly (ops-scripting discipline); the query itself resolves everything through fully-qualified 3-part names, so the connected database is otherwise irrelevant. The result is one ordered set: client, direction, kind, route, state, then the step timeline (`ARRIVED`/`QUARANTINED`/`DUPLICATE_REDELIVERY` and `<STAGE>_INTENDED`/`<STAGE>_<OUTCOME>` from the ops side interleaved with `CRR_INGESTED` -> `CTV_VALIDATED` -> `CIR_RESP_STAGED`/`WRITTEN` -> `CRW_PLANNED`/`CRW_VISIBLE` -> `CIX`/`CSX`/`CPX_REPLY` -> `CRG_REPORTED` -> `RPT_OUTCOME` from the business side; the payments equivalents are `PRR`/`PTV`/`PIR`/`PRW` and `PIX`/`PSX`/`PPX_REPLY` -> `PRG_REPORTED`). `scripts/file-trace-query.sql` was corrected to the post-rename labels on 2026-08-08.
 
 **`error/` and `duplicates/` names:** those on-disk names carry a leading `<uuid>_` claim prefix, and after the quarantine row-id fix the uuid IS the arrival/claim id. The owner tables store the BARE name, so strip the `<uuid>_` prefix before pasting `:fname` (or paste the uuid straight into the `arr` CTE). `audit-file-trace.sh` strips it automatically.
 
@@ -226,4 +234,4 @@ Every repository below is PRIVATE, so an unauthenticated fetch answers 404 for a
 - Cross-family: [dcre-hcs](https://github.com/sean-huni/dcre-hcs), [dcre-rpt](https://github.com/sean-huni/dcre-rpt)
 - Platform libraries: [dcre-platform-model](https://github.com/sean-huni/dcre-platform-model), [dcre-platform-files](https://github.com/sean-huni/dcre-platform-files), [dcre-platform-batch](https://github.com/sean-huni/dcre-platform-batch), [dcre-platform-persistence](https://github.com/sean-huni/dcre-platform-persistence). `platform-copybook` is the fifth library and is local-only: it has no git remote and no GitHub repository as of 2026-08-08.
 - Orchestrator, tooling and docs: [dcre-agt](https://github.com/sean-huni/dcre-agt), [dcre-fixture-toolkit](https://github.com/sean-huni/dcre-fixture-toolkit), [dcre-design-register](https://github.com/sean-huni/dcre-design-register)
-- Archived on 2026-08-08, retained for history and no longer part of the fleet: [dcre-ixr](https://github.com/sean-huni/dcre-ixr), [dcre-sxr](https://github.com/sean-huni/dcre-sxr), [dcre-pxr](https://github.com/sean-huni/dcre-pxr), [dcre-ais](https://github.com/sean-huni/dcre-ais)
+- **Archived on 2026-08-08 and NOT part of the fleet.** These names are retired and must not appear in any manifest, roster, script or dashboard; they are listed here, and only here, so that an archived repository is traceable rather than mysterious: [dcre-ixr](https://github.com/sean-huni/dcre-ixr), [dcre-sxr](https://github.com/sean-huni/dcre-sxr), [dcre-pxr](https://github.com/sean-huni/dcre-pxr), [dcre-ais](https://github.com/sean-huni/dcre-ais). The mandates-side retirements (`mar`, `msr`, `mis`, `maf`) are equally out of the fleet; `mis` and `maf` were renamed to `mit` and `mas`, `mar` was split into `mix`/`msx`/`mpx`, and `msr` was replaced by the `mrg`-derived views
