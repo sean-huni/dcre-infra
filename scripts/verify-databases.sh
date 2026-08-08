@@ -15,7 +15,26 @@ set -u
 
 NS="${DCRE_NS:-dcre}"
 POD="${DCRE_CRDB_POD:-crdb-0}"
-EXPECTED="agt_ops dcre_col dcre_man dcre_pay"
+# FIVE databases. A database is named for the CONTEXT that owns it. The three
+# family databases keep family names because nine or ten services share each; a
+# single-service context takes the SERVICE's name, hence dcre_hcs (holidays,
+# owner hcs) rather than a topic name.
+#
+# dcre_acs WAS HERE FOR ONE DAY AND IS DELIBERATELY GONE. The account registry
+# service that owned it was retired on 2026-08-09: it had no authoritative
+# source, no accountable owner, no ingestion of its own and no freshness
+# contract, so it was a shared integration database wearing the costume of a
+# bounded context, and it made the first validation gate of all three families
+# depend at runtime on 110 static fixture rows. Account reference data now
+# travels as ONE immutable versioned artifact (fixtures/reference/account/) and
+# each context materialises its OWN projection into its OWN database. hcs stays,
+# because unlike acs it ingests from a real upstream (Nager.Date, six-hour sync)
+# and has an accountable owner.
+#
+# If this list ever grows a sixth entry again, the question to ask first is what
+# that context INGESTS and who owns it. A database holding rows nothing produces
+# is a shared table with extra network hops.
+EXPECTED="agt_ops dcre_col dcre_man dcre_pay dcre_hcs"
 
 # Databases every CockroachDB cluster has. They are the positive control: an
 # absence found by searching proves nothing until something proves the search
@@ -27,7 +46,16 @@ CONTROL="defaultdb system"
 # and tail succeeds on anything, so a failed query reads as a successful empty
 # one. That substitution is the A-79 defect itself; the header is stripped below
 # in-process instead, where no exit status can be lost.
-RAW=$(kubectl exec -n "$NS" "$POD" -- ./cockroach sql --insecure --format=csv \
+#
+# --database=defaultdb is EXPLICIT even though SHOW DATABASES is cluster-scoped
+# and would answer identically from any connection database. The rule in this
+# repo has no "harmless read" exemption: an earlier env-reset let the connection
+# database default and put 22 Liquibase history tables into defaultdb while its
+# verify step correctly found zero. defaultdb is chosen because it is the one
+# database this project never drops, so this call cannot fail for want of its
+# own connection target while checking whether the others exist.
+RAW=$(kubectl exec -n "$NS" "$POD" -- ./cockroach sql --insecure \
+  --database=defaultdb --format=csv \
   -e "SELECT database_name FROM [SHOW DATABASES]" 2>/dev/null)
 rc=$?
 

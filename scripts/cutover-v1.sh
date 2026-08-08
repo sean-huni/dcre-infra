@@ -9,7 +9,7 @@
 #    without hacking around the liquibase scripts."
 #
 # So this script does NOT pre-create history tables, does NOT pre-apply DDL and
-# does NOT seed a changelog. It drops, it recreates four empty databases, and
+# does NOT seed a changelog. It drops, it recreates six empty databases, and
 # every table after that is minted by a changeset that actually ran. That is the
 # whole point: a v1 schema nobody can prove came from the changelogs is not a v1
 # schema, it is a coincidence.
@@ -20,10 +20,12 @@
 # as success. Both have bitten this project.
 #
 # EXIT CODES. The three failure modes are never conflated:
-#   0  cutover done, and every family database holds its own objects and no
-#      other family's
-#   1  a real violation: a database is absent, or a family database holds
-#      another family's objects
+#   0  cutover done, and every context database holds its own objects and no
+#      other context's, in BOTH universes: service prefixes and exact relation
+#      placement
+#   1  a real violation: a database is absent, a context database holds another
+#      context's objects, or a moved relation (public_holiday, account,
+#      account_type) is in the wrong database
 #   2  something could not be read or a step failed. NOTHING was learned; do not
 #      read this as a clean result
 #   3  PENDING: the databases are correct and empty, but no service Liquibase has
@@ -44,8 +46,21 @@ EXPECTED_CONTEXT="kind-dcre-dev"
 EXPECTED_CLUSTER="kind-dcre-dev"
 EXPECTED_NODE="dcre-dev-control-plane"
 
-# One database per family, never shared. agt_ops is orchestrator state.
-DATABASES="agt_ops dcre_col dcre_man dcre_pay"
+# One database per OWNING CONTEXT, never shared. agt_ops is orchestrator state.
+#
+# SCRUM-107 shared reference context. A database is named for the context that
+# owns it: the three family databases keep family names because nine or ten
+# services share each, and a single-service context takes the SERVICE's name.
+# Hence dcre_hcs (holidays, owner hcs), not a topic name that would leave the
+# owner unstated.
+#
+# FIVE, and dcre_acs is deliberately not the sixth. It existed for one day. The
+# account registry that owned it had no authoritative source, no accountable
+# owner, no ingestion of its own and no freshness contract, so it was a shared
+# integration database wearing the costume of a bounded context. Account rows
+# now live in each context's OWN database, materialised there by that context's
+# own loader from ONE immutable versioned artifact.
+DATABASES="agt_ops dcre_col dcre_man dcre_pay dcre_hcs"
 
 # The service roster IS the diagrams (design-register R-49; scripts/verify-topology.sh).
 # PRG IS THE PAYMENTS REPORT GENERATOR; the collections one is CRG. Read every
@@ -54,8 +69,22 @@ DATABASES="agt_ops dcre_col dcre_man dcre_pay"
 SVC_COLLECTIONS="crr ctv cde crw cir cix csx cpx crg"
 SVC_PAYMENTS="prr ptv pai prw pir pix psx ppx prg"
 SVC_MANDATES="mrr mrv mas mit mir mrw mix msx mpx mrg"
-# Cross-family: on no family sheet, so never counted as another family's object.
-SVC_SHARED="hcs rpt"
+
+# Single-service shared-reference contexts, each with its OWN database. They
+# were cross-family before SCRUM-107 and hcs is no longer in any family's own
+# roster: leaving it there would let an hcs history table in dcre_col count as
+# one of dcre_col's OWN objects, which is precisely the state the split exists
+# to end. They are foreign to every family database instead.
+SVC_HOLIDAYS="hcs"      # owns dcre_hcs, holds public_holiday
+# There is no SVC_ACCOUNTS. `acs` is retired and its repository is archived, so
+# every list below that used to carry it is one name shorter. `account` is not a
+# service's relation any more: it is a PROJECTION that three different contexts
+# each hold a copy of, in their own databases, under their own constraints.
+
+# Genuinely cross-family: rpt reads everywhere and owns no database of its own,
+# so it is never counted as another context's object. Its objects live in the
+# `rpt` SCHEMA, which this audit's public-schema universe does not cover at all.
+SVC_SHARED="rpt"
 
 FLOW_NAMESPACES="dcre-col dcre-pay dcre-man"
 
@@ -74,7 +103,7 @@ for arg in "$@"; do
       echo "usage: $0 [$CONFIRM_FLAG] [--audit-only]"
       echo "  $CONFIRM_FLAG  perform the drop. Without it this script refuses."
       echo "  --audit-only          skip the drop entirely; only run the"
-      echo "                        per-family isolation audit and report."
+      echo "                        per-context isolation audit and report."
       exit 0 ;;
     *)
       echo "REFUSED: unrecognised argument '$arg'."
@@ -198,7 +227,25 @@ crdb() {
 
 # CSV body without the header row, stripped in-process. `| tail -n +2` would put
 # tail's status where the query's belongs, and tail succeeds on anything.
-csv_body() { printf '%s' "${1#*$'\n'}"; }
+#
+# THE CASE MATTERS, and a bare `${csv#*$'\n'}` gets it wrong. On a ZERO-ROW
+# result cockroach emits the header and nothing else, command substitution eats
+# the trailing newline, and the expansion then has no newline to match. A `#`
+# pattern that does not match returns the string UNCHANGED, so the header comes
+# back as if it were data: a listing query answers "one relation, named
+# table_name" for an empty database, and a count query answers "count".
+#
+# That is not cosmetic. It makes every "is this database empty" branch
+# unreachable, and it turns the information_schema control into a false PASS,
+# because "count" is neither empty nor "0". Found by executing the empty-database
+# case rather than reasoning about it; the stub reproduces cockroach exactly.
+csv_rows() {
+  case "$1" in
+    *$'\n'*) printf '%s' "${1#*$'\n'}" ;;
+    *)       printf '' ;;
+  esac
+}
+csv_body() { csv_rows "$1"; }
 
 # ---------------------------------------------------------------------------
 # Phase 1: quiesce. AGT must be down and stage Jobs gone before the drop, or a
@@ -283,7 +330,9 @@ drop_and_recreate() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 3: the per-family isolation audit.
+# Phase 3: the per-context isolation audit. ONE step, two universes: service
+# PREFIXES here, exact relation PLACEMENT in assert_relation_placement below.
+# Both feed the same severity ranking and the same exit code.
 #
 # The whole point of the cutover is that payments objects stop landing in
 # dcre_col. A cutover that "succeeds" while dcre_col still holds prw_* tables has
@@ -311,7 +360,7 @@ audit_family_db() {
     echo "        about what this database holds."
     return 2
   fi
-  control="$(printf '%s' "${REPLY_CSV#*$'\n'}" | tr -d '\r\n ')"
+  control="$(csv_rows "$REPLY_CSV" | tr -d '\r\n ')"
   if [ -z "$control" ] || [ "$control" = "0" ]; then
     echo "  $db: FAIL(2) the information_schema control returned '${control:-<empty>}'."
     echo "        Every database has an information_schema. This listing is not"
@@ -324,7 +373,7 @@ audit_family_db() {
     echo "  $db: FAIL(2) table listing exited $CRDB_RC (status of cockroach sql)."
     return 2
   fi
-  body="${REPLY_CSV#*$'\n'}"
+  body="$(csv_rows "$REPLY_CSV")"
   # Space-delimited with guaranteed leading and trailing separators, so every
   # entry is matchable, not just the first and last.
   local names=" $(printf '%s' "$body" | tr -d '\r' | tr '\n' ' ') "
@@ -393,6 +442,152 @@ audit_family_db() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# The same step, second half: relation PLACEMENT by exact name.
+#
+# audit_family_db above answers "did a foreign SERVICE write here", and it reads
+# that off table-name PREFIXES. It is structurally blind to the SCRUM-107 move,
+# because the relations that moved carry no service prefix at all: public_holiday
+# and account are bare names, so a public_holiday sitting in dcre_col matches no
+# service's prefix and the prefix audit reports the database clean. That is the
+# fixture-monoculture shape of defect: the instrument cannot express the thing.
+#
+# So placement is asserted by exact relation name, in the SAME step, feeding the
+# SAME severity ranking, and never as a parallel audit with its own exit path.
+#
+# Universe: every relation in the `public` schema, BASE TABLEs AND VIEWS. The
+# table_type filter that audit_family_db uses is deliberately NOT applied here.
+# "dcre_col contains zero relations named account" is false if a compatibility
+# VIEW named account is left behind, and a view is the most likely way for one
+# to survive a move.
+#
+# TWO CONTROLS, and they answer different questions:
+#
+#   (a) INSTRUMENT control, always required, checked FIRST. Searches
+#       information_schema, through the same expression the payload uses, for
+#       three relations every CockroachDB database has. If the search cannot
+#       find those, it could not have found anything, so nothing is asserted and
+#       the message says the INSTRUMENT failed. That wording is load-bearing: it
+#       must never be confused with the assertion having failed, which is a
+#       claim about the database rather than about the search.
+#
+#   (b) CONTENT control, required before any ABSENCE is reported clean. At least
+#       one relation known to belong in this database must be found. Without it,
+#       "zero relations named public_holiday" is the trivially true statement
+#       about an empty database and is reported PENDING, never PASS.
+#
+# A relation found where it must NOT be needs no control at all: a positive find
+# is self-evidencing. That case is therefore judged before either control gate.
+#
+# Returns: 0 clean, 1 assertion failed, 2 instrument failed, 3 pending
+assert_relation_placement() {
+  local db="$1" want_present="$2" want_absent="$3" content_control="$4"
+  local rel ctl ctl_missing names n_public
+  local found_control missing_present found_forbidden
+
+  # ---- (a) instrument control ---------------------------------------------
+  crdb "$db" "SELECT table_name FROM information_schema.tables WHERE table_schema='information_schema' AND table_name IN ('tables','columns','schemata') ORDER BY table_name"
+  if [ "$CRDB_RC" -ne 0 ]; then
+    echo "  $db: INSTRUMENT FAILED. The control query exited $CRDB_RC (that is the"
+    echo "        cockroach sql command's own status). NO assertion was evaluated"
+    echo "        against $db: this is not an assertion failure, it is the search"
+    echo "        never having run."
+    return 2
+  fi
+  ctl=" $(csv_rows "$REPLY_CSV" | tr -d '\r' | tr '\n' ' ') "
+  ctl_missing=""
+  for rel in tables columns schemata; do
+    case "$ctl" in
+      *" $rel "*) ;;
+      *) ctl_missing="$ctl_missing $rel" ;;
+    esac
+  done
+  if [ -n "$ctl_missing" ]; then
+    echo "  $db: INSTRUMENT FAILED. The control searched information_schema for 3"
+    echo "        relations that every CockroachDB database has and did not find:$ctl_missing"
+    echo "        got:$ctl"
+    echo "        A search that cannot find a relation which is certainly present"
+    echo "        cannot establish that any other relation is absent. NO assertion"
+    echo "        was evaluated against $db. This is NOT an assertion failure."
+    return 2
+  fi
+
+  # ---- payload -------------------------------------------------------------
+  crdb "$db" "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name"
+  if [ "$CRDB_RC" -ne 0 ]; then
+    echo "  $db: INSTRUMENT FAILED. The public-schema listing exited $CRDB_RC"
+    echo "        (status of cockroach sql). Nothing was learned about placement."
+    return 2
+  fi
+  names=" $(csv_rows "$REPLY_CSV" | tr -d '\r' | tr '\n' ' ') "
+  n_public=$(printf '%s' "$names" | wc -w | tr -d ' ')
+
+  found_forbidden=""
+  for rel in $want_absent; do
+    case "$names" in
+      *" $rel "*) found_forbidden="$found_forbidden $rel" ;;
+    esac
+  done
+  missing_present=""
+  for rel in $want_present; do
+    case "$names" in
+      *" $rel "*) ;;
+      *) missing_present="$missing_present $rel" ;;
+    esac
+  done
+  found_control=""
+  for rel in $content_control; do
+    case "$names" in
+      *" $rel "*) found_control="$found_control $rel" ;;
+    esac
+  done
+
+  # State the universe with the number, every time.
+  printf "  %-9s placement: %s relations in public (tables+views); want present [%s], want absent [%s]\n" \
+    "$db:" "$n_public" "${want_present:-none}" "${want_absent:-none}"
+
+  # A positive find needs no control: it is self-evidencing.
+  if [ -n "$found_forbidden" ]; then
+    echo "        ASSERTION FAILED: $db holds relations that must not exist there:$found_forbidden"
+    echo "        This is a statement about the DATABASE, not about the search."
+    echo "        SCRUM-107 moved public_holiday to dcre_hcs, and account_type to"
+    echo "        the mandates changelogs in dcre_man alone. account is a per-context"
+    echo "        PROJECTION and belongs in dcre_col, dcre_pay and dcre_man, each"
+    echo "        materialised by that context's own loader from the versioned"
+    echo "        artifact, and nowhere else. A copy anywhere else is a second home"
+    echo "        for one fact, and nothing at read time says which is stale."
+    return 1
+  fi
+
+  if [ -n "$missing_present" ]; then
+    if [ "$n_public" -eq 0 ]; then
+      echo "        PENDING: expected relations absent ($missing_present ) and the"
+      echo "        public schema is EMPTY, so no changelog has run against $db"
+      echo "        yet. Nothing is concluded either way."
+      return 3
+    fi
+    echo "        ASSERTION FAILED: $db is populated ($n_public relations) but is"
+    echo "        missing relations it must own:$missing_present"
+    return 1
+  fi
+
+  if [ -n "$want_absent" ] && [ -z "$found_control" ]; then
+    echo "        PENDING: the content control found NONE of [$content_control]."
+    echo "        Nothing known to belong in $db was found, so 'zero relations"
+    echo "        named$want_absent' is the trivially true statement about an"
+    echo "        empty database and proves nothing. Reported PENDING, not PASS."
+    return 3
+  fi
+
+  if [ -n "$want_absent" ]; then
+    echo "        control: found$found_control in $db, so the search demonstrably"
+    echo "        works here and the absence of$want_absent counts as evidence."
+  else
+    echo "        control: found$found_control in $db."
+  fi
+  return 0
+}
+
 # Exit codes are identifiers, not a severity scale, so `worst` cannot be a plain
 # numeric max: that would let PENDING (3) outrank a VIOLATION (1) and report the
 # run as merely unfinished. Rank explicitly: clean < pending < unreadable <
@@ -422,23 +617,44 @@ note() {
 }
 
 run_audit() {
-  local rc
+  local rc svc roster n_roster col_control
   SEVERITY=0
-  echo "[6/6] per-family isolation audit"
-  echo "      universe: public BASE TABLEs per database, matched against the"
-  echo "      28-service prefix roster from the diagrams. hcs and rpt are"
-  echo "      cross-family and are never counted as a foreign family's objects."
+
+  # Derive the roster size rather than asserting it. The number that stood here
+  # said 28 and the roster it described held 30, because a service was added and
+  # the prose was not. A count that multiplies nothing is still read as a fact.
+  roster="$SVC_COLLECTIONS $SVC_PAYMENTS $SVC_MANDATES $SVC_HOLIDAYS $SVC_SHARED"
+  n_roster=$(printf '%s' "$roster" | wc -w | tr -d ' ')
+
+  echo "[6/6] per-context isolation audit"
+  echo "      universe A (prefix): public BASE TABLEs per database, matched"
+  echo "      against the ${n_roster}-service prefix roster from the diagrams. rpt owns no"
+  echo "      database and keeps its objects in the rpt SCHEMA, so it is never"
+  echo "      counted as another context's object."
+  echo "      universe B (placement): public relations, TABLES AND VIEWS, matched"
+  echo "      by exact name. The relations SCRUM-107 moved carry no service"
+  echo "      prefix, so universe A cannot see the move at all."
 
   audit_family_db dcre_col "$SVC_COLLECTIONS $SVC_SHARED" \
-    "$SVC_PAYMENTS $SVC_MANDATES" "payments-or-mandates"; rc=$?
+    "$SVC_PAYMENTS $SVC_MANDATES $SVC_HOLIDAYS" \
+    "payments-mandates-holidays-or-accounts"; rc=$?
   note "$rc"
 
   audit_family_db dcre_pay "$SVC_PAYMENTS" \
-    "$SVC_COLLECTIONS $SVC_MANDATES" "collections-or-mandates"; rc=$?
+    "$SVC_COLLECTIONS $SVC_MANDATES $SVC_HOLIDAYS" \
+    "collections-mandates-holidays-or-accounts"; rc=$?
   note "$rc"
 
   audit_family_db dcre_man "$SVC_MANDATES" \
-    "$SVC_COLLECTIONS $SVC_PAYMENTS" "collections-or-payments"; rc=$?
+    "$SVC_COLLECTIONS $SVC_PAYMENTS $SVC_HOLIDAYS" \
+    "collections-payments-holidays-or-accounts"; rc=$?
+  note "$rc"
+
+  # The one single-service shared-reference context. Every family prefix is
+  # foreign in it.
+  audit_family_db dcre_hcs "$SVC_HOLIDAYS" \
+    "$SVC_COLLECTIONS $SVC_PAYMENTS $SVC_MANDATES" \
+    "a-family"; rc=$?
   note "$rc"
 
   # agt_ops carries orchestrator state plus the rpt ops views. No stage service
@@ -447,7 +663,66 @@ run_audit() {
   # because asserting a name this script has not verified would be a claim, not
   # a check.
   audit_family_db agt_ops "rpt" \
-    "$SVC_COLLECTIONS $SVC_PAYMENTS $SVC_MANDATES" "stage-service"; rc=$?
+    "$SVC_COLLECTIONS $SVC_PAYMENTS $SVC_MANDATES $SVC_HOLIDAYS" \
+    "stage-or-reference-service"; rc=$?
+  note "$rc"
+
+  # ---- universe B: relation placement --------------------------------------
+  #
+  # THE ASSERTION INVERTED ON 2026-08-09, AND THAT IS THE WHOLE POINT OF THE
+  # WAVE. It used to read "account exists ONLY in dcre_acs", because there was
+  # one shared table three contexts read across a database boundary. It now
+  # reads "account exists in each of the three context databases, and in none of
+  # the others", because there are three tables holding three different
+  # PROJECTIONS of one immutable versioned artifact, each with its own family's
+  # NOT NULL constraints. Three copies of a projection is not the two-homes
+  # defect: nothing writes them but their own loader, each records the
+  # dataset_version it consumed, and no context reads another's.
+  #
+  # The shapes are DELIBERATELY DIFFERENT and must not be reconciled. dcre_col
+  # and dcre_pay carry the 17-column collections shape; dcre_man carries the
+  # mandates shape plus account_type. A future audit that finds them unequal has
+  # found the design, not a defect.
+  #
+  # Each database's content control is any of its OWN services' Liquibase
+  # history tables: those are what it certainly holds once a changelog has run,
+  # and if none is found the database is empty, so any absence would be
+  # trivially true and is reported PENDING rather than PASS.
+  col_control=""
+  for svc in $SVC_COLLECTIONS; do
+    col_control="$col_control ${svc}_databasechangelog"
+  done
+  assert_relation_placement dcre_col "account" "public_holiday account_type" \
+    "$col_control"; rc=$?
+  note "$rc"
+
+  pay_control=""
+  for svc in $SVC_PAYMENTS; do
+    pay_control="$pay_control ${svc}_databasechangelog"
+  done
+  assert_relation_placement dcre_pay "account" "public_holiday account_type" \
+    "$pay_control"; rc=$?
+  note "$rc"
+
+  # dcre_man is the ONLY database that holds account_type. It is a closed
+  # vocabulary seeded by the mandates changelogs and is NOT part of the
+  # artifact, so no loader touches it and the two collections-shape copies have
+  # no business carrying it.
+  man_control=""
+  for svc in $SVC_MANDATES; do
+    man_control="$man_control ${svc}_databasechangelog"
+  done
+  assert_relation_placement dcre_man "account account_type" "public_holiday" \
+    "$man_control"; rc=$?
+  note "$rc"
+
+  # dcre_hcs holds public_holiday and NOT account. The control is public_holiday
+  # itself plus the hcs history table. That is not circular: the want-present
+  # check is evaluated FIRST and returns before the absence is judged, so by the
+  # time "account is absent" is asserted, public_holiday has been CONFIRMED
+  # present and is a relation genuinely known to be there.
+  assert_relation_placement dcre_hcs "public_holiday" "account account_type" \
+    "public_holiday hcs_databasechangelog"; rc=$?
   note "$rc"
 
   return "$(code_of "$SEVERITY")"
@@ -473,7 +748,7 @@ if [ "$audit_only" -eq 0 ]; then
   echo "      verify-databases.sh exited $rc_verify (that status belongs to"
   echo "      verify-databases.sh, no pipeline is involved)"
   if [ "$rc_verify" -ne 0 ]; then
-    echo "cutover ABORTED: the four databases are not all present."
+    echo "cutover ABORTED: the six databases are not all present."
     exit "$rc_verify"
   fi
 
@@ -500,10 +775,13 @@ run_audit; overall=$?
 
 echo "--------------------------------------------------------------------------"
 case "$overall" in
-  0) echo "RESULT: every family database holds its own objects and no other"
-     echo "        family's. Version 1 schemas were built by changesets that ran." ;;
-  1) echo "RESULT: FAIL. A family database holds another family's objects. The"
-     echo "        cutover did not achieve isolation; see the VIOLATION lines." ;;
+  0) echo "RESULT: every context database holds its own objects and no other"
+     echo "        context's, and public_holiday / account / account_type are each"
+     echo "        in exactly the one database that owns them. Version 1 schemas"
+     echo "        were built by changesets that ran." ;;
+  1) echo "RESULT: FAIL. A context database holds another context's objects, or a"
+     echo "        moved relation is in the wrong database. The cutover did not"
+     echo "        achieve isolation; see the VIOLATION and ASSERTION FAILED lines." ;;
   2) echo "RESULT: UNREADABLE. A query failed, so nothing was learned about"
      echo "        isolation. This is NOT a pass." ;;
   3) echo "RESULT: PENDING. Databases are present and empty of their own"

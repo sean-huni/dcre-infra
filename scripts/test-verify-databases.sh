@@ -21,9 +21,14 @@ exit "${STUB_RC:-0}"
 STUBEOF
 chmod +x "$STUB/kubectl"
 
+# The roster is FIVE databases (2026-08-09: dcre_acs was here for one day and
+# its owning service is retired). These fixtures are deliberately kept in the
+# order CockroachDB returns (alphabetical), which is also how a human reads a
+# real SHOW DATABASES, so a fixture that drifts from reality is visible.
 FULL='database_name
 agt_ops
 dcre_col
+dcre_hcs
 dcre_man
 dcre_pay
 defaultdb
@@ -33,7 +38,39 @@ system'
 NO_PAY='database_name
 agt_ops
 dcre_col
+dcre_hcs
 dcre_man
+defaultdb
+postgres
+system'
+
+# The shared-reference database absent, everything else present. This is the
+# fixture that would have gone green before SCRUM-107 and must now fail: it is
+# the only case that holds the roster ADDITION down. Without it, dropping
+# dcre_hcs back out of EXPECTED leaves every other case passing.
+NO_SHARED_REF='database_name
+agt_ops
+dcre_col
+dcre_man
+dcre_pay
+defaultdb
+postgres
+system'
+
+# The retired database still standing on a cluster that was never cleaned. This
+# is now an EXTRA name, not a missing one, and the roster check must be
+# indifferent to it: verify-databases.sh asserts presence and says nothing about
+# surplus. Pinned as a case rather than left undecided, because "does an extra
+# database fail this gate" is exactly the question a reader will have, and an
+# unwritten answer gets guessed. The gate that refuses the SERVICE is
+# verify-topology.sh, which is red-proofed separately.
+STALE_ACS='database_name
+agt_ops
+dcre_acs
+dcre_col
+dcre_hcs
+dcre_man
+dcre_pay
 defaultdb
 postgres
 system'
@@ -41,6 +78,7 @@ system'
 NO_CONTROL='database_name
 agt_ops
 dcre_col
+dcre_hcs
 dcre_man
 dcre_pay'
 
@@ -51,6 +89,7 @@ dcre_pay'
 BAD_HEADER='db_name
 agt_ops
 dcre_col
+dcre_hcs
 dcre_man
 dcre_pay
 defaultdb
@@ -105,7 +144,27 @@ STUB_RC=0 STUB_OUT="$BAD_HEADER" \
 STUB_RC=0 STUB_OUT="$NO_PAY" \
   check 'read cleanly, dcre_pay absent -> missing' 1 'absent:[[:space:]]*dcre_pay$'
 
-STUB_RC=0 STUB_OUT="$FULL"        check 'read cleanly, all present -> pass'             0
+# SCRUM-107 roster addition. The absent list is asserted EXACTLY, in EXPECTED's
+# own order, so "reported some absence" cannot stand in for "reported this one".
+STUB_RC=0 STUB_OUT="$NO_SHARED_REF" \
+  check 'read cleanly, the shared-reference DB absent -> missing' 1 \
+  'absent:[[:space:]]*dcre_hcs$'
+
+# THE ROSTER MUST NOT SILENTLY REGROW. dcre_acs was in EXPECTED for one day and
+# its owning service is retired, so a listing that still carries it is a cluster
+# that was never cleaned, not a roster that is short. verify-databases.sh does
+# not assert the absence of an unexpected database, and this case pins that
+# choice down rather than leaving it undecided: an extra database is reported as
+# present and PASSES, and the topology gate is what refuses the service.
+STUB_RC=0 STUB_OUT="$STALE_ACS" \
+  check 'a stale dcre_acs still on the cluster -> still PASS, roster unchanged' 0 \
+  'PASS: all present \(agt_ops dcre_col dcre_man dcre_pay dcre_hcs\)'
+
+# The PASS message names the roster it checked. Asserting the message and not
+# only the code is what stops a five-name EXPECTED silently becoming a four-name
+# one: exit 0 is identical either way.
+STUB_RC=0 STUB_OUT="$FULL"        check 'read cleanly, all five present -> pass' 0 \
+  'PASS: all present \(agt_ops dcre_col dcre_man dcre_pay dcre_hcs\)'
 
 # The case the whole script exists for: a FAILED query that still put a
 # plausible partial listing on stdout. Read as "queried, dcre_pay is missing"

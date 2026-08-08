@@ -34,11 +34,20 @@ REQ_mandates="mrr mrv mas mit mir mrw mix msx mpx mrg"
 # not read by the loop below, which is exactly why it was wrong and stayed wrong:
 # a value nothing executes is a comment wearing the costume of a check.
 ALLOWED_platform="platform-batch platform-copybook platform-files platform-model platform-persistence"
-# SCRUM-107 adds `acs`, the account reference service. Like hcs and rpt it is
-# cross-family and appears on no diagram sheet, which is why it is declared here:
-# the sheets are the specification for the three FAMILIES, and a shared context
-# that no sheet shows would otherwise read as drift forever.
-ALLOWED_shared="acs hcs rpt"
+# `acs` was added here on 2026-08-08 and REMOVED on 2026-08-09. It is not a
+# service any more: the account registry it owned had no authoritative source,
+# no accountable owner, no ingestion of its own and no freshness contract, so it
+# was retired in favour of ONE immutable versioned artifact that each context
+# materialises locally. Its repository is archived and its directory is deleted,
+# so this gate now FAILS if it reappears, which is the intended direction: a
+# resurrected `shared/acs` would read as UNDECLARED and stop the release.
+#
+# hcs and rpt stay. hcs ingests from a real upstream (the Nager.Date API, on a
+# six-hour sync) and rpt is the reporting context; both are cross-family and
+# appear on no diagram sheet, which is why they are declared here: the sheets
+# are the specification for the three FAMILIES, and a shared context that no
+# sheet shows would otherwise read as drift forever.
+ALLOWED_shared="hcs rpt"
 
 [ -d "$ROOT" ] || { echo "FAIL: \$DCRE_ROOT '$ROOT' is not a directory."; \
                     echo "      The tree was not read, so no conclusion is drawn."; exit 2; }
