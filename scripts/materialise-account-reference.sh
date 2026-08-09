@@ -347,14 +347,14 @@ echo "        run_loaders() below and --run-loaders."
 #      version set explicitly
 #   4. wait for each Job and report per context
 #
-# ONE THING IT CANNOT FIX FROM HERE, and it is a real finding, recorded rather
-# than papered over: only CTV derives its artifact root from the exchange root
-# (collections/ctv application.yml). PTV and MRV still default theirs to
-# ../../../../../../infra/dcre-infra/fixtures/reference/account, six parent hops
-# that resolve on a developer's machine and cannot exist in a pod. This function
-# therefore sets DCRE_PTV_ACCOUNT_REFERENCE_ROOT and
-# DCRE_MRV_ACCOUNT_REFERENCE_ROOT explicitly. The durable fix is in those two
-# repos, not in infra.
+# THE ROOT IS SET EXPLICITLY ANYWAY, and that is belt AND braces rather than a
+# workaround. All three services now derive their artifact root from
+# ${DCRE_EXCHANGE_ROOT}/reference/account, which AGT already injects as
+# /exchange, so each would resolve /exchange/reference/account on its own. The
+# explicit setting below is the same value stated by the caller, so a Job this
+# script launches does not depend on the image having been rebuilt since the
+# defaults were fixed. An older image still carries the six-hop relative path
+# that cannot exist in a pod, and it would fail confusingly rather than loudly.
 #
 # It FAILS CLOSED on everything it cannot read, and it names what it looked for,
 # because "I could not look" must never be reported as "I looked and there was
