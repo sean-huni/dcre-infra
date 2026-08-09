@@ -14,7 +14,9 @@
 # account reference data is not seeded by infra at all. It travels as ONE
 # immutable versioned artifact (fixtures/reference/account/) and each of the
 # three contexts materialises its OWN projection into its OWN database by
-# running its own loader job. Step 6 VERIFIES that artifact and applies nothing.
+# running its own loader job. Step 6 VERIFIES that artifact and STAGES it into
+# the exchange root, where the dcre-exchange PVC makes it visible to a pod as
+# /exchange/reference/account/<version>. Step 6 does NOT run the loader jobs.
 #
 # The two-argument form is not accepted silently. Passing it is an ERROR that
 # names the replacement, because an accounts file quietly ignored would look
@@ -149,8 +151,9 @@ done
 
 echo "[6/12] apply the CANONICAL shared reference data:"
 echo "       - dcre_man: seed-man-core.sql (mandate_reason_code)"
-echo "       - accounts: NOT SEEDED HERE. The artifact is verified, and the three"
-echo "         loaders materialise it into their own databases."
+echo "       - accounts: NOT SEEDED INTO A DATABASE HERE. The artifact is verified"
+echo "         and STAGED into the exchange root; the three loaders materialise"
+echo "         it from there into their own databases when they run."
 # SCRUM-107 v1 cutover: seed-liquibase-history.sql is DELETED and no longer applied
 # here. It pre-created every module's Liquibase history+lock tables so a fresh
 # database already had them, which is precisely the "hacking around the liquibase
@@ -205,8 +208,39 @@ echo "       dcre_man shared-core: mandate_reason_code present"
 # Spring Batch jobs costs a test round. The gate fails closed and never conflates
 # "invalid" (exit 1) with "could not be read" (exit 2).
 "$INFRA/scripts/verify-account-reference.sh"
-echo "       account reference artifact verified; materialisation is each context's"
-echo "       own loader job, into dcre_col, dcre_pay and dcre_man respectively."
+echo "       account reference artifact verified."
+
+# AND NOW IT IS ACTUALLY PUT SOMEWHERE A POD CAN REACH IT. Verifying and then
+# applying nothing is what this step did until 2026-08-09, and it is the whole
+# defect: the artifact lived only in git, the ONLY volume a stage pod has is the
+# dcre-exchange PVC, so the three loaders could never have found it. `account`
+# was empty in every deployed environment and every verdict chain answered
+# FAIL_ACCOUNT_NOT_FOUND, which read as a data-quality problem rather than as a
+# deploy step nobody had written.
+#
+# WHAT THIS STAGES, AND WHAT IT DOES NOT RUN. It copies the artifact into
+# exchange/reference/account/<version>, which is the DATA the three loader jobs
+# read (CTV accountReferenceLoadJob, PTV ptvAccountReferenceLoadJob, MRV
+# mrvAccountReferenceLoadJob). RUNNING those jobs is a SEPARATE CONCERN and is
+# deliberately not done here: --run-loaders is NOT passed, because that path has
+# never been executed against a cluster and an unverified cluster call must not
+# reach a reset's default path.
+#
+# BEFORE the warm-up in step 10 and before AGT comes back in step 8, so no family
+# pipeline can run against a missing artifact. `set -e` is in force and this call
+# is not in a condition, so a non-zero exit stops the reset here, which is the
+# intended direction: an artifact the loaders would reject is cheaper to find in
+# a second than in three Spring Batch jobs.
+#
+# Step 7 cleans the exchange PER-CLIENT trees and outcomes/ only, so it does not
+# remove what this just staged. Do not widen that cleanup to the whole exchange
+# root without moving this call after it.
+"$INFRA/scripts/materialise-account-reference.sh"
+echo "       account reference artifact staged into exchange/reference/account;"
+echo "       a stage pod reads it as /exchange/reference/account/<version>."
+echo "       Materialisation INTO each database is still each context's own loader"
+echo "       job, into dcre_col, dcre_pay and dcre_man respectively, and nothing"
+echo "       here launches those jobs."
 
 # The 46-history-table verification that stood here is GONE with the seed it
 # verified. It asserted that dcre_col held 24, dcre_man 20 and agt_ops 2 Liquibase

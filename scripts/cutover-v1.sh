@@ -248,6 +248,46 @@ csv_rows() {
 csv_body() { csv_rows "$1"; }
 
 # ---------------------------------------------------------------------------
+# Phase 0: materialise the account reference artifact.
+#
+# WHAT THIS STAGES, AND WHAT IT DOES NOT RUN. This copies the versioned artifact
+# into the exchange root, which is the DATA the three per-context loader jobs
+# (CTV's accountReferenceLoadJob, PTV's ptvAccountReferenceLoadJob, MRV's
+# mrvAccountReferenceLoadJob) read from the dcre-exchange PVC. RUNNING those
+# loader jobs is a SEPARATE CONCERN and is deliberately not done here:
+# --run-loaders is NOT passed, because that path has never been executed against
+# a cluster and an unverified cluster call must not reach a cutover's default
+# path. Staging without loading leaves the account tables empty; loading without
+# staging is impossible. This step is the half that can be proven.
+#
+# FIRST, BEFORE THE DROP, and deliberately so. The step touches the local
+# filesystem only and costs about a second. The alternative ordering destroys
+# five databases and only then discovers there is no reference data to load into
+# them, which leaves the environment strictly worse than it found it and forces a
+# second full run. "Before the audit" is satisfied from any position in this
+# script; "before anything irreversible" is satisfied only from here.
+#
+# IT HALTS THE CUTOVER. A cutover that proceeds without reference data produces
+# exactly the misleading failure this change exists to remove: every verdict
+# chain answers FAIL_ACCOUNT_NOT_FOUND, and a deployment step that never happened
+# is then read for weeks as a data-quality problem. The exit codes line up
+# already, so they are passed straight through: 1 is a real finding about the
+# artifact, 2 is "nothing was learned".
+# ---------------------------------------------------------------------------
+materialise_reference() {
+  local rc=0
+
+  echo "[1/7] materialising the account reference artifact into the exchange root"
+  echo "      (fixtures/reference/account -> exchange/reference/account, which a"
+  echo "      stage pod reads as /exchange/reference/account/<version> through the"
+  echo "      dcre-exchange PVC, the only volume a stage pod has)"
+  bash "$HERE/materialise-account-reference.sh" || rc=$?
+  echo "      materialise-account-reference.sh exited $rc (that status belongs to"
+  echo "      that script; no pipeline is involved)"
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # Phase 1: quiesce. AGT must be down and stage Jobs gone before the drop, or a
 # watcher/clock writes into a database that is being dropped and the drop's own
 # schema-change jobs collide with a half-created table.
@@ -255,7 +295,7 @@ csv_body() { csv_rows "$1"; }
 quiesce() {
   local rc
 
-  echo "[1/6] scaling AGT to 0 (watcher, reconciler and clocks must not write"
+  echo "[2/7] scaling AGT to 0 (watcher, reconciler and clocks must not write"
   echo "      into a database that is being dropped)"
   rc=0; kubectl scale deploy dcre-agt -n "$NS" --replicas=0 >/dev/null 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -266,7 +306,7 @@ quiesce() {
   rc=0; kubectl wait --for=delete pod -l app=dcre-agt -n "$NS" --timeout=90s >/dev/null 2>&1 || rc=$?
   [ "$rc" -ne 0 ] && echo "      NOTE: kubectl wait exited $rc; proceeding."
 
-  echo "[2/6] deleting stage Jobs and pods in the flow namespaces"
+  echo "[3/7] deleting stage Jobs and pods in the flow namespaces"
   echo "      ($FLOW_NAMESPACES). crdb-0 lives in '$NS' and is NEVER touched,"
   echo "      nor is its PVC: this script drops DATABASES, not storage."
   for ns in $FLOW_NAMESPACES; do
@@ -291,7 +331,7 @@ quiesce() {
 drop_and_recreate() {
   local sql="" db
 
-  echo "[3/6] dropping and recreating: $DATABASES"
+  echo "[4/7] dropping and recreating: $DATABASES"
   for db in $DATABASES; do
     sql="$sql DROP DATABASE IF EXISTS $db CASCADE;"
   done
@@ -309,7 +349,7 @@ drop_and_recreate() {
   fi
   echo "      DROP/CREATE exited 0 (status of the cockroach sql command)"
 
-  echo "[4/6] draining CockroachDB schema-change jobs (DROP ... CASCADE returns"
+  echo "[5/7] draining CockroachDB schema-change jobs (DROP ... CASCADE returns"
   echo "      while its jobs still run; recreating into that window collides"
   echo "      with half-materialised metadata)"
   local waited=0 pending body
@@ -626,7 +666,7 @@ run_audit() {
   roster="$SVC_COLLECTIONS $SVC_PAYMENTS $SVC_MANDATES $SVC_HOLIDAYS $SVC_SHARED"
   n_roster=$(printf '%s' "$roster" | wc -w | tr -d ' ')
 
-  echo "[6/6] per-context isolation audit"
+  echo "[7/7] per-context isolation audit"
   echo "      universe A (prefix): public BASE TABLEs per database, matched"
   echo "      against the ${n_roster}-service prefix roster from the diagrams. rpt owns no"
   echo "      database and keeps its objects in the rpt SCHEMA, so it is never"
@@ -734,6 +774,20 @@ run_audit() {
 overall=0
 
 if [ "$audit_only" -eq 0 ]; then
+  materialise_reference; rc_ref=$?
+  if [ "$rc_ref" -ne 0 ]; then
+    echo "--------------------------------------------------------------------------"
+    echo "cutover HALTED at step 1, BEFORE the drop. NOTHING has been dropped and"
+    echo "nothing has been scaled: the environment is exactly as it was found."
+    echo "        materialise-account-reference.sh exited $rc_ref."
+    echo "        A cutover without reference data is worse than no cutover: the"
+    echo "        three loader jobs would find no artifact, every account lookup in"
+    echo "        collections, payments and mandates would answer"
+    echo "        FAIL_ACCOUNT_NOT_FOUND, and a deploy step that never ran would"
+    echo "        read as a data-quality problem for as long as anybody believed it."
+    exit "$rc_ref"
+  fi
+
   quiesce
   drop_and_recreate; rc_drop=$?
   if [ "$rc_drop" -ne 0 ]; then
@@ -742,7 +796,7 @@ if [ "$audit_only" -eq 0 ]; then
     exit 2
   fi
 
-  echo "[5/6] verifying the database roster with scripts/verify-databases.sh"
+  echo "[6/7] verifying the database roster with scripts/verify-databases.sh"
   rc_verify=0
   DCRE_NS="$NS" DCRE_CRDB_POD="$POD" bash "$HERE/verify-databases.sh" || rc_verify=$?
   echo "      verify-databases.sh exited $rc_verify (that status belongs to"
@@ -764,7 +818,12 @@ if [ "$audit_only" -eq 0 ]; then
     echo "      rollout's)"
   fi
 else
-  echo "[5/6] verifying the database roster with scripts/verify-databases.sh"
+  echo "[1/7] materialising the account reference artifact: SKIPPED under"
+  echo "      --audit-only, which is a read-only mode. Nothing is being recreated"
+  echo "      and no family pipeline will run off this invocation, so staging"
+  echo "      would be a write nobody asked for. Run the cutover proper, or"
+  echo "      scripts/materialise-account-reference.sh on its own, to stage it."
+  echo "[6/7] verifying the database roster with scripts/verify-databases.sh"
   rc_verify=0
   DCRE_NS="$NS" DCRE_CRDB_POD="$POD" bash "$HERE/verify-databases.sh" || rc_verify=$?
   echo "      verify-databases.sh exited $rc_verify"
