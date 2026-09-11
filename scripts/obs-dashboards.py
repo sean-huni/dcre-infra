@@ -969,8 +969,22 @@ def check_manifests() -> list[str]:
     # A STALE entry is as silent as a missing one, in the other direction: a key removed
     # from the generator but left in the manifest makes the pod refuse to start only if
     # the key is required, and otherwise just sits there lying. Count both lists.
-    projected = [ln.strip()[len("- key: "):] for ln in dep.splitlines()
-                 if ln.strip().startswith("- key: ")]
+    # Scoped to THIS ConfigMap's own volume blocks. A flat sweep of every `- key:` line
+    # in the Deployment was wrong the moment a second generated ConfigMap arrived beside
+    # this one (06-obs-alerting.yml, 2026-09-11): it read the alerting keys as stale
+    # dashboard keys and failed a gate that had nothing to complain about. A guard that
+    # goes red on a neighbour's correct work is a guard people learn to ignore.
+    projected, in_this_configmap = [], False
+    for ln in dep.splitlines():
+        stripped = ln.strip()
+        if stripped.startswith("- name: "):
+            in_this_configmap = False          # a new volume; ownership is re-decided below
+        elif stripped == f"name: {CONFIGMAP_NAME}":
+            in_this_configmap = True
+        elif stripped.startswith("name: ") and stripped != f"name: {CONFIGMAP_NAME}":
+            in_this_configmap = False
+        elif in_this_configmap and stripped.startswith("- key: "):
+            projected.append(stripped[len("- key: "):])
     stale = sorted(set(projected) - set(keys))
     if stale:
         findings.append(f"{DEPLOYMENT.name} projects keys this generator does not emit: "
