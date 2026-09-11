@@ -9,3 +9,4 @@ build/
 
 # python bytecode cache, created when obs-provisioning-proof.sh imports the generator
 __pycache__/
+scripts/package-lock.json
