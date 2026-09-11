@@ -1,0 +1,66 @@
+DCRE stack paused 2026-09-11. Recorded BEFORE stopping, so resume can be verified
+against it rather than against memory.
+
+== declared replicas (restore to THESE, never to 1)
+dcre                 dcre-agt                 1     1
+dcre                 lgtm                     1     1
+kube-system          coredns                  2     2
+local-path-storage   local-path-provisioner   1     1
+dcre   crdb   1     1
+
+== namespaces
+  dcre
+  dcre-col
+  dcre-man
+  dcre-pay
+  default
+  kube-node-lease
+  kube-public
+  kube-system
+  local-path-storage
+
+== images the orchestrator launches
+AGT_CRR_IMAGE=dcre-crr:2.5.0
+AGT_CTV_IMAGE=dcre-ctv:2.5.0
+AGT_CIR_IMAGE=dcre-cir:2.5.0
+AGT_CDE_IMAGE=dcre-cde:2.5.0
+AGT_CRW_IMAGE=dcre-crw:2.5.0
+AGT_IXR_IMAGE=dcre-ixr:2.3.7
+AGT_SXR_IMAGE=dcre-sxr:2.3.7
+AGT_PXR_IMAGE=dcre-pxr:2.3.7
+AGT_PRG_IMAGE=dcre-prg:2.5.0
+AGT_AIS_IMAGE=dcre-ais:2.3.7
+AGT_HCS_IMAGE=dcre-hcs:2.3.7
+AGT_MRR_IMAGE=dcre-mrr:2.5.0
+AGT_MRV_IMAGE=dcre-mrv:2.5.0
+AGT_MAS_IMAGE=dcre-mas:2.5.0
+AGT_MIT_IMAGE=dcre-mit:2.5.0
+AGT_MIR_IMAGE=dcre-mir:2.5.0
+AGT_MRW_IMAGE=dcre-mrw:2.5.0
+AGT_MIX_IMAGE=dcre-mix:2.5.0
+AGT_MSX_IMAGE=dcre-msx:2.5.0
+AGT_MPX_IMAGE=dcre-mpx:2.5.0
+AGT_MRG_IMAGE=dcre-mrg:2.5.0
+AGT_CIX_IMAGE=dcre-cix:2.5.0
+AGT_CPX_IMAGE=dcre-cpx:2.5.0
+AGT_CRG_IMAGE=dcre-crg:2.5.0
+AGT_CSX_IMAGE=dcre-csx:2.5.0
+AGT_PAI_IMAGE=dcre-pai:2.5.0
+AGT_PIR_IMAGE=dcre-pir:2.5.0
+AGT_PIX_IMAGE=dcre-pix:2.5.0
+AGT_PPX_IMAGE=dcre-ppx:2.5.0
+AGT_PRR_IMAGE=dcre-prr:2.5.0
+AGT_PRW_IMAGE=dcre-prw:2.5.0
+AGT_PSX_IMAGE=dcre-psx:2.5.0
+AGT_PTV_IMAGE=dcre-ptv:2.5.0
+
+== ledger size at pause (agt_ops)
+?column?	count
+launch_intent	97775
+stage_outcome	97950
+file_arrival	62
+
+== report columns at pause, the thing this session repaired
+  dcre_col: prg_report.type 
+  dcre_man: man_report.type 
+  dcre_pay: prg_report.type 
