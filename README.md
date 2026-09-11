@@ -163,7 +163,9 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `lgtm-forward.sh` | Idempotent Grafana forward: host 3001 (3000 stays reserved for compose LGTM) |
 | `lgtm-up.sh` | Revive the compose LGTM container with a Grafana health wait (OTLP exporters fail open, so a dead collector drops telemetry silently) |
 | `grafana-provision.sh` | Idempotent client-stats provisioning against the in-cluster Grafana (:3001): 4 orgs (FNBCC01, FNBCC02, FNBRF01, FNB Internal), one Editor login per org (dev password `devdev`), and per-org CockroachDB datasources scoped to that client's DB role (`dcre-rpt`; FNB Internal also gets `dcre-ops` on `agt_ops`). Basic-auth admin API; removes each client from Main Org so its sole membership is its own org |
-| `grafana-dashboards.sh` | Posts two dashboard packs (fixed UIDs, `overwrite:true`, idempotent): `dcre-client-stats` to every org (session-identity portability: one JSON renders per-client via each org's scoped datasource) and `dcre-internal-stats` to FNB Internal only |
+| `grafana-dashboards.sh` | Posts two dashboard packs (fixed UIDs, `overwrite:true`, idempotent): `dcre-client-stats` to every org (session-identity portability: one JSON renders per-client via each org's scoped datasource) and `dcre-internal-stats` to FNB Internal only. **This is the HTTP-API path and it is superseded for the fleet's OTLP boards**, which are generated and file-provisioned by `obs-dashboards.py`; the two share nothing and neither extends the other |
+| `obs-dashboards.py` | The GENERATOR for the fleet's four OTLP dashboards (Overview, Stage Jobs, Traces, Logs). Emits exactly one artifact, `k8s/base/05-obs-dashboards.yml`, a ConfigMap holding the Grafana dashboard provider and the four dashboard JSONs; `04-lgtm.yml` mounts the provider into Grafana's provisioning directory and the JSONs into `/etc/dcre/dashboards`. Three modes. Default rewrites the artifact. `--check` regenerates in memory and fails on drift, and additionally fails when `04-lgtm.yml` stops projecting a key this generator emits, because the manifest naming each file is a second home for that fact whose failure is otherwise silent. `--verify` runs EVERY panel target against the live Prometheus, Loki and Tempo, refuses to publish on any query error, and lists every target that returned empty. Red-proofed on four arms: a hand-edited artifact, a removed `items` entry, a malformed PromQL expression, and an unreachable Grafana (exit 2, never a clean pass) |
+| `obs-provisioning-proof.sh` | The two-part proof that those dashboards came from FILES and not from the API: every dashboard reports `meta.provisioned` true with `provisionedExternalId` naming the mounted file, AND the Grafana log holds zero POSTs to `/api/dashboards/db`. The second half is an absence, so it refuses unless a POST of some OTHER kind is present in the same log through the same matcher: without that control the assertion is equally satisfied by a log that records nothing, which is what this bundle does by default. Exit 2 for an unreachable Grafana, never conflated with a pass |
 | `rpt-accuracy-check.sh` | 60-assertion accuracy matrix (19 per-client checks x 3 clients, plus 2 ops checks and 1 cross-client integrity assertion; counted 2026-08-08 from the `check` call sites and the trailing inline assertion): independent raw-SQL derivation from base tables (as `root`) vs the rpt views the dashboards display (as each client / `rpt_internal`); fail-closed (empty/non-numeric FAILS), exits non-zero on any mismatch (spec gate) |
 | `rpt-security-probes.sh` | Negative security probes: grants wall (client role denied on `public.*` and ops views, asserting SQLSTATE 42501) plus per-view cross-client scoping and a non-emptiness canary; exits non-zero on any unexpected access |
 | `grafana-screenshots.mjs` | Playwright (headless chromium) evidence capture: logs in as each org user and screenshots every dashboard, proving per-client isolation and full panel rendering (tall viewport so lazy panels paint). Manifest: `scripts/package.json` |
@@ -210,7 +212,41 @@ Two Grafana instances run, deliberately kept separate:
 
 The ambient `GRAFANA_URL` (used by the Grafana MCP) points at the *compose* LGTM on :3000, so the client-stats scripts deliberately target :3001 explicitly (override with `DCRE_GRAFANA_URL`) rather than inherit it.
 
-**Operational dashboards** (`dcre-pipeline` RED baseline, `dcre-agt` arrivals/intents/outcomes) are managed via the Grafana API/MCP, never hand-edited JSON; the in-cluster Grafana is PVC-backed so they survive pod restarts.
+**Fleet OTLP dashboards are GENERATED and FILE-PROVISIONED.** Four boards live in the `DCRE`
+folder of the in-cluster Grafana: `dcre-fleet-overview` (who is reporting, arrivals, outcomes,
+SLA), `dcre-stage-jobs` (launch intents, stage failures, Spring Batch), `dcre-traces` (span rate
+and latency plus live TraceQL searches) and `dcre-logs` (volume by level and the failure lines
+themselves). They are emitted by `scripts/obs-dashboards.py` into the ConfigMap
+`k8s/base/05-obs-dashboards.yml` and delivered by Grafana file provisioning, never clicked into
+existence, never hand-maintained as JSON, and never posted through `POST /api/dashboards/db`.
+Prove it with `scripts/obs-provisioning-proof.sh`.
+
+Delivering the pair is two applies and a rollout, deliberately narrower than `kubectl apply -k
+k8s/base` so a dashboard change cannot churn namespaces or CockroachDB:
+
+```bash
+python3 scripts/obs-dashboards.py                       # regenerate the artifact
+python3 scripts/obs-dashboards.py --check               # artifact and manifest agree
+kubectl apply -f k8s/base/05-obs-dashboards.yml         # ConfigMap FIRST: the Deployment mounts it
+kubectl apply -f k8s/base/04-lgtm.yml
+kubectl -n dcre rollout status deploy/lgtm --timeout=300s
+python3 scripts/obs-dashboards.py --verify              # every panel query, against live data
+./scripts/obs-provisioning-proof.sh                     # provisioned:true + zero dashboard POSTs
+```
+
+**A rollout of `lgtm` discards every metric, log and trace it holds.** Only `/data/grafana` is on
+the PVC; `/data/prometheus`, `/data/loki` and `/data/tempo` live in the container's writable layer
+(measured in the running pod on 2026-09-11: `/proc/mounts` carries one `/data/grafana` entry, and
+those three directories held 1.5M, 400K and 17M). Grafana's own state, orgs, users and
+API-created dashboards, survives; the telemetry does not. The orchestrator's gauges are polled
+from the database and so return to full value at the next 60s export, but rate panels need two
+samples and anything reading a 6h range reads only as far back as the restart. Do not roll `lgtm`
+immediately before capturing evidence.
+
+The earlier claim here, that operational dashboards `dcre-pipeline` and `dcre-agt` are managed via
+the Grafana API/MCP, is superseded by the boards above and was in any case not true of this
+cluster: both UIDs returned 404 and the only org present was Main Org when checked on 2026-09-11,
+so the client-stats provisioning below had not been re-run since the cluster was rebuilt.
 
 **Client self-service stats** (M8, SCRUM-50) are provisioned and verified deterministically by the scripts above, in order:
 

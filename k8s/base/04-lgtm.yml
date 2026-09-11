@@ -61,6 +61,24 @@ spec:
               value: "false"
             - name: GF_SNAPSHOTS_PUBLIC_MODE
               value: "false"
+            # These two exist so the file-provisioning proof is FALSIFIABLE.
+            #
+            # The claim behind the DCRE dashboards is that they arrive from a file and
+            # never from POST /api/dashboards/db. An absence found by searching proves
+            # nothing unless the search could have found something, and by default this
+            # bundle discards Grafana's log entirely (run_with_logging sends it to
+            # /dev/null unless ENABLE_LOGS_GRAFANA is true) while Grafana itself logs no
+            # requests at all (router_logging defaults to false). With both off, "zero
+            # dashboard POSTs in the log" is true of a log that could not have recorded
+            # one, which is not evidence.
+            #
+            # With both on, the log carries every request, so the POSTs that DO happen
+            # (/api/ds/query when a board loads, /api/frontend-metrics) are the positive
+            # control, and zero POSTs to /api/dashboards/db beside them is a measurement.
+            - name: ENABLE_LOGS_GRAFANA
+              value: "true"
+            - name: GF_SERVER_ROUTER_LOGGING
+              value: "true"
           ports:
             - containerPort: 3000
             - containerPort: 4317
@@ -68,6 +86,29 @@ spec:
           volumeMounts:
             - name: grafana-data
               mountPath: /data/grafana
+            # DCRE OTLP dashboards, delivered by Grafana FILE PROVISIONING and never by
+            # POST /api/dashboards/db. Both mounts come from the one ConfigMap that
+            # scripts/obs-dashboards.py generates (05-obs-dashboards.yml).
+            #
+            # The provider lands as a single file INSIDE the image's own provisioning
+            # directory, via subPath. Mounting the directory instead would shadow
+            # grafana-dashboards.yaml and grafana-datasources.yaml and take the bundle's
+            # own boards and the Prometheus/Loki/Tempo datasources down with it.
+            #
+            # That directory is /otel-lgtm/grafana/conf/provisioning and NOT
+            # $GF_PATHS_HOME/conf/provisioning: run-grafana.sh sets GF_PATHS_HOME to
+            # /data/grafana but launches `./bin/grafana server` from /otel-lgtm/grafana
+            # with no --homepath, so Grafana resolves the default relative provisioning
+            # path against its working directory. Verified in the running pod on
+            # 2026-09-11: /data/grafana/conf does not exist, and the bundle's own
+            # provisioning files are the ones under /otel-lgtm.
+            - name: dcre-dashboards-provider
+              mountPath: /otel-lgtm/grafana/conf/provisioning/dashboards/dcre-provider.yaml
+              subPath: dcre-provider.yaml
+              readOnly: true
+            - name: dcre-dashboards
+              mountPath: /etc/dcre/dashboards
+              readOnly: true
           # BestEffort criticals forbidden (CRDB OOM lesson 2026-07-13)
           resources:
             requests:
@@ -85,3 +126,24 @@ spec:
         - name: grafana-data
           persistentVolumeClaim:
             claimName: lgtm-grafana
+        # Two volumes, one ConfigMap. `items` on each keeps the provider YAML out of the
+        # dashboard directory and the dashboard JSON out of Grafana's provisioning
+        # directory, so neither mount can pick up a file meant for the other.
+        - name: dcre-dashboards-provider
+          configMap:
+            name: dcre-obs-dashboards
+            items:
+              - key: dcre-provider.yaml
+                path: dcre-provider.yaml
+        - name: dcre-dashboards
+          configMap:
+            name: dcre-obs-dashboards
+            items:
+              - key: dcre-fleet-overview.json
+                path: dcre-fleet-overview.json
+              - key: dcre-stage-jobs.json
+                path: dcre-stage-jobs.json
+              - key: dcre-traces.json
+                path: dcre-traces.json
+              - key: dcre-logs.json
+                path: dcre-logs.json

@@ -6,3 +6,6 @@ exchange/**
 # grafana-screenshots.mjs local run artifacts (playwright module + PNG output)
 node_modules/
 build/
+
+# python bytecode cache, created when obs-provisioning-proof.sh imports the generator
+__pycache__/
