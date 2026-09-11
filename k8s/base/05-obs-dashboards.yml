@@ -2548,7 +2548,7 @@ data:
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "description": "Completed Spring Batch job executions, split by job name and terminal status. METRIC NAME DERIVED, NOT YET OBSERVED. Spring Batch 6.0.4 creates the observations spring.batch.job and spring.batch.step with keys spring.batch.job.name / .status and spring.batch.step.name / .type / .job.name / .status, read from the bytecode of AbstractJob and AbstractStep in spring-batch-core-6.0.4.jar. Micrometer's OTLP registry uses MILLISECONDS as its base time unit, which is why every Micrometer timer already in this Prometheus renders as <name>_milliseconds_* (jvm_gc_pause_milliseconds_bucket, http_server_connections_duration_milliseconds). The name matcher accepts both the millisecond and the second rendering so a unit change upstream cannot silently empty this panel. EMPTY UNTIL THE FLEET RUNS. The 28 stage services publish as job=dcre-<leaf> and none of them was reporting when this board was generated, because a migration defect was crashing them at startup. Empty here means the stage fleet is not up, not that the panel is broken; the orchestrator panels on this same board are the control that proves the board works.",
+          "description": "Completed Spring Batch job executions, split by job name and terminal status. Each execution is its own pod and therefore its own series, exporting once before it exits, so rate() and increase() are empty by construction here and this panel reads the cumulative counter instead. Measured: 25 series, one sample each per five-minute window. METRIC NAME DERIVED, NOT YET OBSERVED. Spring Batch 6.0.4 creates the observations spring.batch.job and spring.batch.step with keys spring.batch.job.name / .status and spring.batch.step.name / .type / .job.name / .status, read from the bytecode of AbstractJob and AbstractStep in spring-batch-core-6.0.4.jar. Micrometer's OTLP registry uses MILLISECONDS as its base time unit, which is why every Micrometer timer already in this Prometheus renders as <name>_milliseconds_* (jvm_gc_pause_milliseconds_bucket, http_server_connections_duration_milliseconds). The name matcher accepts both the millisecond and the second rendering so a unit change upstream cannot silently empty this panel. EMPTY UNTIL THE FLEET RUNS. The 28 stage services publish as job=dcre-<leaf> and none of them was reporting when this board was generated, because a migration defect was crashing them at startup. Empty here means the stage fleet is not up, not that the panel is broken; the orchestrator panels on this same board are the control that proves the board works.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -2600,7 +2600,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum by (spring_batch_job_name, spring_batch_job_status) (rate({__name__=~\"spring_batch_job_(milli)?seconds_count\", job=~\"dcre-.*\"}[$__rate_interval]))",
+              "expr": "sum by (spring_batch_job_name, spring_batch_job_status) ({__name__=~\"spring_batch_job_(milli)?seconds_count\", job=~\"dcre-.*\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "{{spring_batch_job_name}} {{spring_batch_job_status}}",
@@ -2608,7 +2608,7 @@ data:
               "refId": "A"
             }
           ],
-          "title": "Spring Batch job executions per second",
+          "title": "Spring Batch job executions, cumulative",
           "type": "timeseries"
         },
         {
@@ -2616,7 +2616,7 @@ data:
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "description": "95th percentile wall time of a Spring Batch job execution. METRIC NAME DERIVED, NOT YET OBSERVED. Spring Batch 6.0.4 creates the observations spring.batch.job and spring.batch.step with keys spring.batch.job.name / .status and spring.batch.step.name / .type / .job.name / .status, read from the bytecode of AbstractJob and AbstractStep in spring-batch-core-6.0.4.jar. Micrometer's OTLP registry uses MILLISECONDS as its base time unit, which is why every Micrometer timer already in this Prometheus renders as <name>_milliseconds_* (jvm_gc_pause_milliseconds_bucket, http_server_connections_duration_milliseconds). The name matcher accepts both the millisecond and the second rendering so a unit change upstream cannot silently empty this panel. EMPTY UNTIL THE FLEET RUNS. The 28 stage services publish as job=dcre-<leaf> and none of them was reporting when this board was generated, because a migration defect was crashing them at startup. Empty here means the stage fleet is not up, not that the panel is broken; the orchestrator panels on this same board are the control that proves the board works. The unit is left unset because the bucket boundaries carry the upstream unit and forcing a unit here would mislabel one of the two renderings.",
+          "description": "Mean wall time of a Spring Batch job execution, as total time over total executions. A p95 is NOT available: histogram_quantile reads bucket counts through rate(), which is empty here for the reason below. Each execution is its own pod and therefore its own series, exporting once before it exits, so rate() and increase() are empty by construction here and this panel reads the cumulative counter instead. Measured: 25 series, one sample each per five-minute window. METRIC NAME DERIVED, NOT YET OBSERVED. Spring Batch 6.0.4 creates the observations spring.batch.job and spring.batch.step with keys spring.batch.job.name / .status and spring.batch.step.name / .type / .job.name / .status, read from the bytecode of AbstractJob and AbstractStep in spring-batch-core-6.0.4.jar. Micrometer's OTLP registry uses MILLISECONDS as its base time unit, which is why every Micrometer timer already in this Prometheus renders as <name>_milliseconds_* (jvm_gc_pause_milliseconds_bucket, http_server_connections_duration_milliseconds). The name matcher accepts both the millisecond and the second rendering so a unit change upstream cannot silently empty this panel. EMPTY UNTIL THE FLEET RUNS. The 28 stage services publish as job=dcre-<leaf> and none of them was reporting when this board was generated, because a migration defect was crashing them at startup. Empty here means the stage fleet is not up, not that the panel is broken; the orchestrator panels on this same board are the control that proves the board works. The unit is left unset because the bucket boundaries carry the upstream unit and forcing a unit here would mislabel one of the two renderings.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -2668,7 +2668,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "histogram_quantile(0.95, sum by (le, spring_batch_job_name) (rate({__name__=~\"spring_batch_job_(milli)?seconds_bucket\", job=~\"dcre-.*\"}[$__rate_interval])))",
+              "expr": "sum by (spring_batch_job_name) ({__name__=~\"spring_batch_job_(milli)?seconds_sum\", job=~\"dcre-.*\"}) / sum by (spring_batch_job_name) ({__name__=~\"spring_batch_job_(milli)?seconds_count\", job=~\"dcre-.*\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "{{spring_batch_job_name}}",
@@ -2676,7 +2676,7 @@ data:
               "refId": "A"
             }
           ],
-          "title": "Spring Batch job duration, p95",
+          "title": "Spring Batch job duration, mean",
           "type": "timeseries"
         },
         {
@@ -2684,7 +2684,7 @@ data:
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "description": "Spring Batch job executions that ended FAILED, counted over the dashboard's time range. METRIC NAME DERIVED, NOT YET OBSERVED. Spring Batch 6.0.4 creates the observations spring.batch.job and spring.batch.step with keys spring.batch.job.name / .status and spring.batch.step.name / .type / .job.name / .status, read from the bytecode of AbstractJob and AbstractStep in spring-batch-core-6.0.4.jar. Micrometer's OTLP registry uses MILLISECONDS as its base time unit, which is why every Micrometer timer already in this Prometheus renders as <name>_milliseconds_* (jvm_gc_pause_milliseconds_bucket, http_server_connections_duration_milliseconds). The name matcher accepts both the millisecond and the second rendering so a unit change upstream cannot silently empty this panel. EMPTY UNTIL THE FLEET RUNS. The 28 stage services publish as job=dcre-<leaf> and none of them was reporting when this board was generated, because a migration defect was crashing them at startup. Empty here means the stage fleet is not up, not that the panel is broken; the orchestrator panels on this same board are the control that proves the board works.",
+          "description": "Spring Batch job executions that ended FAILED, as a cumulative count rather than a count over the dashboard's range. Each execution is its own pod and therefore its own series, exporting once before it exits, so rate() and increase() are empty by construction here and this panel reads the cumulative counter instead. Measured: 25 series, one sample each per five-minute window. METRIC NAME DERIVED, NOT YET OBSERVED. Spring Batch 6.0.4 creates the observations spring.batch.job and spring.batch.step with keys spring.batch.job.name / .status and spring.batch.step.name / .type / .job.name / .status, read from the bytecode of AbstractJob and AbstractStep in spring-batch-core-6.0.4.jar. Micrometer's OTLP registry uses MILLISECONDS as its base time unit, which is why every Micrometer timer already in this Prometheus renders as <name>_milliseconds_* (jvm_gc_pause_milliseconds_bucket, http_server_connections_duration_milliseconds). The name matcher accepts both the millisecond and the second rendering so a unit change upstream cannot silently empty this panel. EMPTY UNTIL THE FLEET RUNS. The 28 stage services publish as job=dcre-<leaf> and none of them was reporting when this board was generated, because a migration defect was crashing them at startup. Empty here means the stage fleet is not up, not that the panel is broken; the orchestrator panels on this same board are the control that proves the board works.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -2736,7 +2736,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum by (job, spring_batch_job_name) (increase({__name__=~\"spring_batch_job_(milli)?seconds_count\", job=~\"dcre-.*\", spring_batch_job_status=\"FAILED\"}[$__range]))",
+              "expr": "sum by (job, spring_batch_job_name) ({__name__=~\"spring_batch_job_(milli)?seconds_count\", job=~\"dcre-.*\", spring_batch_job_status=\"FAILED\"})",
               "format": "table",
               "instant": true,
               "legendFormat": "{{job}} {{spring_batch_job_name}}",
@@ -2744,7 +2744,7 @@ data:
               "refId": "A"
             }
           ],
-          "title": "Failed Spring Batch jobs in the window",
+          "title": "Failed Spring Batch job executions",
           "type": "table"
         },
         {
@@ -2752,7 +2752,7 @@ data:
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "description": "Step-level throughput inside the jobs. METRIC NAME DERIVED, NOT YET OBSERVED. Spring Batch 6.0.4 creates the observations spring.batch.job and spring.batch.step with keys spring.batch.job.name / .status and spring.batch.step.name / .type / .job.name / .status, read from the bytecode of AbstractJob and AbstractStep in spring-batch-core-6.0.4.jar. Micrometer's OTLP registry uses MILLISECONDS as its base time unit, which is why every Micrometer timer already in this Prometheus renders as <name>_milliseconds_* (jvm_gc_pause_milliseconds_bucket, http_server_connections_duration_milliseconds). The name matcher accepts both the millisecond and the second rendering so a unit change upstream cannot silently empty this panel. EMPTY UNTIL THE FLEET RUNS. The 28 stage services publish as job=dcre-<leaf> and none of them was reporting when this board was generated, because a migration defect was crashing them at startup. Empty here means the stage fleet is not up, not that the panel is broken; the orchestrator panels on this same board are the control that proves the board works.",
+          "description": "Step-level volume inside the jobs. Each execution is its own pod and therefore its own series, exporting once before it exits, so rate() and increase() are empty by construction here and this panel reads the cumulative counter instead. Measured: 25 series, one sample each per five-minute window. METRIC NAME DERIVED, NOT YET OBSERVED. Spring Batch 6.0.4 creates the observations spring.batch.job and spring.batch.step with keys spring.batch.job.name / .status and spring.batch.step.name / .type / .job.name / .status, read from the bytecode of AbstractJob and AbstractStep in spring-batch-core-6.0.4.jar. Micrometer's OTLP registry uses MILLISECONDS as its base time unit, which is why every Micrometer timer already in this Prometheus renders as <name>_milliseconds_* (jvm_gc_pause_milliseconds_bucket, http_server_connections_duration_milliseconds). The name matcher accepts both the millisecond and the second rendering so a unit change upstream cannot silently empty this panel. EMPTY UNTIL THE FLEET RUNS. The 28 stage services publish as job=dcre-<leaf> and none of them was reporting when this board was generated, because a migration defect was crashing them at startup. Empty here means the stage fleet is not up, not that the panel is broken; the orchestrator panels on this same board are the control that proves the board works.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -2804,7 +2804,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum by (spring_batch_step_name) (rate({__name__=~\"spring_batch_step_(milli)?seconds_count\", job=~\"dcre-.*\"}[$__rate_interval]))",
+              "expr": "sum by (spring_batch_step_name) ({__name__=~\"spring_batch_step_(milli)?seconds_count\", job=~\"dcre-.*\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "{{spring_batch_step_name}}",
@@ -2812,7 +2812,7 @@ data:
               "refId": "A"
             }
           ],
-          "title": "Spring Batch step executions per second",
+          "title": "Spring Batch step executions, cumulative",
           "type": "timeseries"
         }
       ],

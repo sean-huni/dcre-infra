@@ -303,6 +303,20 @@ SPRING_BATCH_NOTE = (
 )
 
 
+# A stage service is a Spring Batch job in a Kubernetes Job: it exports ONCE and the pod dies,
+# and the next execution is a new pod, so it is a new `instance` and therefore a NEW SERIES.
+# Measured 2026-09-11 on kind-dcre-dev: 25 series, every one of them carrying exactly ONE sample
+# inside a five-minute window. rate() and increase() both need two samples in the window ON ONE
+# SERIES, so both return EMPTY here, forever, and four panels rendered "No data" against a fleet
+# that was running fine. The cumulative counter is what carries the information: summing it over
+# the ephemeral series counts executions, and sum/count gives the mean duration that
+# histogram_quantile(rate(...)) cannot.
+BATCH_EPHEMERAL_NOTE = (
+    "Each execution is its own pod and therefore its own series, exporting once before it exits, "
+    "so rate() and increase() are empty by construction here and this panel reads the cumulative "
+    "counter instead. Measured: 25 series, one sample each per five-minute window."
+)
+
 def overview_dashboard() -> dict:
     return {
         "uid": "dcre-fleet-overview",
@@ -558,38 +572,45 @@ def jobs_dashboard() -> dict:
                 unit="bytes", w=12, h=8,
             ),
             timeseries(
-                "Spring Batch job executions per second",
+                "Spring Batch job executions, cumulative",
                 "Completed Spring Batch job executions, split by job name and terminal status. "
-                + SPRING_BATCH_NOTE,
+                + BATCH_EPHEMERAL_NOTE + " " + SPRING_BATCH_NOTE,
                 [prom(f'sum by (spring_batch_job_name, spring_batch_job_status) '
-                      f'(rate({{__name__=~"spring_batch_job_(milli)?seconds_count", job=~"{STAGE_JOBS}"}}[$__rate_interval]))',
+                      f'({{__name__=~"spring_batch_job_(milli)?seconds_count", job=~"{STAGE_JOBS}"}})',
                       "{{spring_batch_job_name}} {{spring_batch_job_status}}")],
                 w=12, h=8,
             ),
             timeseries(
-                "Spring Batch job duration, p95",
-                "95th percentile wall time of a Spring Batch job execution. " + SPRING_BATCH_NOTE
+                "Spring Batch job duration, mean",
+                "Mean wall time of a Spring Batch job execution, as total time over total "
+                "executions. A p95 is NOT available: histogram_quantile reads bucket counts "
+                "through rate(), which is empty here for the reason below. "
+                + BATCH_EPHEMERAL_NOTE + " " + SPRING_BATCH_NOTE
                 + " The unit is left unset because the bucket boundaries carry the upstream unit "
                 "and forcing a unit here would mislabel one of the two renderings.",
-                [prom(f'histogram_quantile(0.95, sum by (le, spring_batch_job_name) '
-                      f'(rate({{__name__=~"spring_batch_job_(milli)?seconds_bucket", job=~"{STAGE_JOBS}"}}[$__rate_interval])))',
+                [prom(f'sum by (spring_batch_job_name) '
+                      f'({{__name__=~"spring_batch_job_(milli)?seconds_sum", job=~"{STAGE_JOBS}"}}) '
+                      f'/ sum by (spring_batch_job_name) '
+                      f'({{__name__=~"spring_batch_job_(milli)?seconds_count", job=~"{STAGE_JOBS}"}})',
                       "{{spring_batch_job_name}}")],
                 w=12, h=8,
             ),
             table(
-                "Failed Spring Batch jobs in the window",
-                "Spring Batch job executions that ended FAILED, counted over the dashboard's time "
-                "range. " + SPRING_BATCH_NOTE,
+                "Failed Spring Batch job executions",
+                "Spring Batch job executions that ended FAILED, as a cumulative count rather than "
+                "a count over the dashboard's range. " + BATCH_EPHEMERAL_NOTE + " "
+                + SPRING_BATCH_NOTE,
                 [prom(f'sum by (job, spring_batch_job_name) '
-                      f'(increase({{__name__=~"spring_batch_job_(milli)?seconds_count", job=~"{STAGE_JOBS}", spring_batch_job_status="FAILED"}}[$__range]))',
+                      f'({{__name__=~"spring_batch_job_(milli)?seconds_count", job=~"{STAGE_JOBS}", spring_batch_job_status="FAILED"}})',
                       "{{job}} {{spring_batch_job_name}}", instant=True, fmt="table")],
                 thresholds=RED_ABOVE, color_mode="thresholds", w=12, h=8,
             ),
             timeseries(
-                "Spring Batch step executions per second",
-                "Step-level throughput inside the jobs. " + SPRING_BATCH_NOTE,
+                "Spring Batch step executions, cumulative",
+                "Step-level volume inside the jobs. " + BATCH_EPHEMERAL_NOTE + " "
+                + SPRING_BATCH_NOTE,
                 [prom(f'sum by (spring_batch_step_name) '
-                      f'(rate({{__name__=~"spring_batch_step_(milli)?seconds_count", job=~"{STAGE_JOBS}"}}[$__rate_interval]))',
+                      f'({{__name__=~"spring_batch_step_(milli)?seconds_count", job=~"{STAGE_JOBS}"}})',
                       "{{spring_batch_step_name}}")],
                 w=12, h=8,
             ),
