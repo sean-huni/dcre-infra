@@ -24,8 +24,8 @@ Client-first layout under the single exchange root: `exchange/<clientbase>/<chan
 
 - `onhost-req` (in/error/archive): inbound copybooks; filenames carry client + MsgId; AGT watches `in`.
 - `onhost-req-endo` (in/error/archive): inbound ENDO Payments DAG (`PRR -> PTV -> PAI -> {PRW, PIR}`, per AGT's `RouteDags`, checked 2026-09-28).
-- `onhost-resp` (out/error/archive): CIR/PRG output.
-- `fint-req` (out/error/archive): CRW pain.008; fint-sim consumes `out`.
+- `onhost-resp` (out/error/archive): written by CIR and PIR (initial responses) and CRG and PRG (reports).
+- `fint-req` (out/error/archive): CRW and PRW pain.008; fint-sim consumes `out`.
 - `fint-resp` (in/error/archive): pain.002-family; fint-sim drops `in`; AGT watches.
 - `onhost-req-man` (in/error/archive): inbound mandate instruction books (M10 mandates route).
 - `onhost-resp-man` (out/error/archive): mandate outcome output (M10 mandates route).
@@ -84,6 +84,8 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `DCRE_EXCHANGE_ROOT` | `./exchange` | Single exchange root; the per-client tree lives under it |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP ingest (LGTM) |
 
+These are the variables `.env.example` names, not a closed set: each script reads further variables with its own committed default (for example `DCRE_GRAFANA_URL`, `GRAFANA_DEV_PASSWORD`, `DCRE_COCKROACH`, `CRDB_USER`, `CRDB_DATABASE`, `DCRE_TRACE_QUERY`). To list them, grep `scripts/` for `${NAME:-` and `process.env.`.
+
 ## Scripts (runbooks)
 
 | Script | Purpose |
@@ -94,6 +96,7 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `lgtm-forward.sh` | Idempotent Grafana forward: host 3001 (3000 stays reserved for compose LGTM) |
 | `lgtm-up.sh` | Revive the compose LGTM container with a Grafana health wait (OTLP exporters fail open, so a dead collector drops telemetry silently) |
 | `grafana-provision.sh` | Idempotent client-stats provisioning against the in-cluster Grafana (:3001): 4 orgs (FNBCC01, FNBCC02, FNBRF01, FNB Internal), one Editor login per org (dev password `devdev`), and per-org CockroachDB datasources scoped to that client's DB role (`dcre-rpt`; FNB Internal also gets `dcre-ops` on `agt_ops`). Basic-auth admin API; removes each client from Main Org so its sole membership is its own org |
+| `grafana-alerts.sh` | Idempotent provisioning of five alert rules (SLA amber/red, DAG failed, stage TECH_FAILED, telemetry silent; SCRUM-61/62) into the in-cluster Grafana via its HTTP provisioning API, fixed rule UIDs |
 | `grafana-dashboards.sh` | Posts two dashboard packs (fixed UIDs, `overwrite:true`, idempotent): `dcre-client-stats` to every org (session-identity portability: one JSON renders per-client via each org's scoped datasource) and `dcre-internal-stats` to FNB Internal only |
 | `rpt-accuracy-check.sh` | 54-check accuracy matrix: independent raw-SQL derivation from base tables (as `root`) vs the rpt views the dashboards display (as each client / `rpt_internal`); fail-closed (empty/non-numeric FAILS), exits non-zero on any mismatch (spec gate) |
 | `rpt-security-probes.sh` | Negative security probes: grants wall (client role denied on `public.*` and ops views, asserting SQLSTATE 42501) plus per-view cross-client scoping and a non-emptiness canary; exits non-zero on any unexpected access |
@@ -103,6 +106,7 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 | `fint-sim.sh` + `fint_sim_reply.py` | Fintegrate simulator: per client, polls `fint-req/out` for `*_PAIN008.xml`, replies with `{client}_{msgId}_ISR/SBSR/PBSR.xml` into `fint-resp/in` (atomic tmp+rename; every 4th tx RJCT with Rsn AC04), archives the request. M10 mandates leg (`--mandate`): polls `fint-req-man/out` for the mrw outbound `*_PAIN009/010/011.xml` and replies with a pain.012 `ISR`(ACCP)/`SBSR`(PDNG)/`PBSR` trio into `fint-resp-man/in`; PBSR is ACCP, except every 4th mandate RJCT with a rotating reason (AC01/AC04/MD01/MS03) and every 7th a delayed debtor-auth (PDNG then a second `-AUTH_PBSR.xml` ACCP after `--auth-delay-seconds`). Fault selection is a stable digest of the MndtReqId, so replays are byte-identical |
 | `test_fint_sim_reply.py` | Stdlib verification suite for `fint_sim_reply.py` (mandate trio, reason rotation, delayed-auth, replay-idempotency, collections regression): `python3 scripts/test_fint_sim_reply.py` |
 | `crdb-init.sql` | Guarded creation of `dcre_col`, `agt_ops` and `dcre_man` |
+| `seed-man-core.sql` | Canonical `dcre_man` shared-core DDL and seed rows (SCRUM-73), idempotent; `env-reset.sh` applies it before any mandates service boots so their guarded `000-man-core-bootstrap` changesets converge as no-ops |
 | `seed-liquibase-history.sql` | Pre-creates every module's Liquibase history+lock tables (first-run bootstrap-race guard, idempotent) |
 | `file-trace-query.sql` | The saved cross-DB file-name killer query (SCRUM-58): resolve ANY boundary filename to client/direction/kind/route + ordered step timeline. Run as `rpt_internal`; substitute `:fname`. See the trace runbook below |
 | `audit-file-trace.sh` | Trace-resolution audit gate (SCRUM-58): every exchange file must resolve to >= 1 row from the killer query; exits non-zero listing any untraceable file. Called by the chaos harness as a post-run gate step |
@@ -112,8 +116,11 @@ All values have committed working defaults (`.env.example`); copy to `.env` only
 Stage images are built in each service repo, then loaded into the cluster; AGT (deployment `dcre-agt`, ServiceAccount `dcre-agt` with RBAC to create, watch and delete batch Jobs and read pods in `dcre`, `dcre-col`, `dcre-pay` and `dcre-man`, plus configmaps and secrets in `dcre`; no `pods/log`) mints them as short-lived k8s Jobs, one per stage execution:
 
 ```bash
-# In each stage-service repo: build, image, load
+# In each stage-service repo that ships a Dockerfile: build, image, load
 ./gradlew bootJar && docker build -t dcre-SVC:TAG . && kind load docker-image --name dcre-dev dcre-SVC:TAG
+# Stage repos with no Dockerfile build with Paketo via bootBuildImage
+# (checked 2026-09-28: pir, pix, ppx, prg, prr, prw, psx, ptv):
+./gradlew bootBuildImage --imageName=dcre-SVC:TAG && kind load docker-image --name dcre-dev dcre-SVC:TAG
 # AGT (Quarkus, Alpine production image per the fleet's Alpine-only standing rule):
 ./gradlew build && docker build -f src/main/docker/Dockerfile.jvm.prod -t dcre-agt:TAG .
 
@@ -161,7 +168,7 @@ A prod supporter who holds ANY boundary file name resolves it, in one saved quer
 
 **Why a saved statement and not a view:** a persisted cross-DB view needs the deprecated cluster-wide `sql.cross_db_views.enabled`, which stays OFF on the shared cluster. Ad-hoc 3-part-name (`<db>.rpt.<view>`) cross-DB SELECTs work by default, so the query runs from any database in the cluster.
 
-**Run it (as `rpt_internal` or `root` only** -- the four views are gated `WHERE current_user IN ('rpt_internal','root')`, so client datasource roles see zero rows; cross-client file names are tenant leakage):
+**Run it (as `rpt_internal` or `root` only**: the four views are gated `WHERE current_user IN ('rpt_internal','root')`, so client datasource roles see zero rows; cross-client file names are tenant leakage):
 
 ```bash
 # Replace :fname with the bare basename as a single-quoted literal (cockroach sql has no :var binding).
@@ -176,17 +183,17 @@ sed "s/:fname/'${FNAME}'/g" scripts/file-trace-query.sql \
   | cockroach sql --insecure --host=localhost:26257 --user=rpt_internal --database=dcre_col
 ```
 
-The `--database` is passed explicitly (ops-scripting discipline); the query itself resolves everything through fully-qualified 3-part names, so the connected database is otherwise irrelevant. The result is one ordered set: client, direction, kind, route, state, then the step timeline (`ARRIVED`/`QUARANTINED`/`DUPLICATE_REDELIVERY` and `<STAGE>_INTENDED`/`<STAGE>_<OUTCOME>` from the ops side interleaved with `CRR_INGESTED` -> `CTV_VALIDATED` -> `CIR_RESP_STAGED`/`WRITTEN` -> `CRW_PLANNED`/`CRW_VISIBLE` -> `IXR`/`SXR`/`PXR_REPLY` -> `PRG_REPORTED` -> `RPT_OUTCOME` from the business side).
+The `--database` is passed explicitly (ops-scripting discipline); the query itself resolves everything through fully-qualified 3-part names, so the connected database is otherwise irrelevant. The result is one ordered set: client, direction, kind, route, state, then the step timeline (`ARRIVED`/`QUARANTINED`/`DUPLICATE_REDELIVERY` and `<STAGE>_INTENDED`/`<STAGE>_<OUTCOME>` from the ops side interleaved with `CRR_INGESTED` -> `CTV_VALIDATED` -> `CIR_RESP_STAGED`/`WRITTEN` -> `CRW_PLANNED`/`CRW_VISIBLE` -> `IXR`/`SXR`/`PXR_REPLY` -> `PRG_REPORTED` -> `RPT_OUTCOME` from the business side). Those reply and report labels are retired stage names still emitted as literals by dcre-rpt's `rpt.v_flow_trace` view (changeset `005-file-trace-views.xml`) and repeated in the query's own header comment: `IXR`/`SXR`/`PXR` now mean CIX/CSX/CPX, and `PRG_REPORTED` is the collections report written by CRG (checked 2026-09-28).
 
 **`error/` and `duplicates/` names:** those on-disk names carry a leading `<uuid>_` claim prefix, and after the quarantine row-id fix the uuid IS the arrival/claim id. The owner tables store the BARE name, so strip the `<uuid>_` prefix before pasting `:fname` (or paste the uuid straight into the `arr` CTE). `audit-file-trace.sh` strips it automatically.
 
-**The audit gate (`audit-file-trace.sh`):** after an e2e / chaos run it enumerates every file under the exchange root, runs the killer query for each, and exits non-zero listing any file that returns zero rows (an untraceable boundary file = a capture-layer hole). It excludes `inflight/`, `*.tmp` and hidden markers (`.gitkeep`, `.reset-stamp`, `.staging-drop`) -- the non-deliverable / partial-write artifacts. The chaos harness invokes it as a post-run gate step:
+**The audit gate (`audit-file-trace.sh`):** after an e2e / chaos run it enumerates every file under the exchange root, runs the killer query for each, and exits non-zero listing any file that returns zero rows (an untraceable boundary file = a capture-layer hole). It excludes `inflight/`, `*.tmp` and hidden markers (`.gitkeep`, `.reset-stamp`, `.staging-drop`), the non-deliverable / partial-write artifacts. The chaos harness invokes it as a post-run gate step:
 
 ```bash
 scripts/audit-file-trace.sh || { echo "trace-resolution gate failed"; exit 1; }
 ```
 
-Config is 12-factor (committed defaults target the kind cluster, matching `rpt-security-probes.sh`): `DCRE_EXCHANGE_ROOT` (or first arg), `DCRE_COCKROACH` (connection command prefix), `CRDB_USER` (default `rpt_internal`), `CRDB_DATABASE` (default `dcre_col`). Exit codes: `0` all files resolve, `1` one or more unresolved, `2` config error, `3` query/connection failure (fails closed -- a dead DB never false-passes). Override the connection for the inner loop, e.g. `DCRE_COCKROACH="cockroach sql --insecure --host=localhost:26257"`.
+Config is 12-factor (committed defaults target the kind cluster, matching `rpt-security-probes.sh`): `DCRE_EXCHANGE_ROOT` (or first arg), `DCRE_COCKROACH` (connection command prefix), `CRDB_USER` (default `rpt_internal`), `CRDB_DATABASE` (default `dcre_col`). Exit codes: `0` all files resolve, `1` one or more unresolved, `2` config error, `3` query/connection failure (fails closed: a dead DB never false-passes). Override the connection for the inner loop, e.g. `DCRE_COCKROACH="cockroach sql --insecure --host=localhost:26257"`.
 
 **Honest limitations (no backfill, by design):** pre-feature CIR RESP names and pre-feature duplicate re-deliveries stay as dark as they are today; legacy files of every other class trace immediately from existing owner columns. Dev-only `local-<svc>-<executionId>` seam names of the non-rpt modules are self-describing into batch metadata but are NOT killer-query-resolvable (only rpt's seam names are, via `rpt_run`).
 
